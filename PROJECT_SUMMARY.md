@@ -201,9 +201,10 @@ ELSE water_plants
 ## 📖 Documentation Map
 
 ### For Initial Setup
-1. **Start here**: `QUICKSTART.md` (30-minute basic setup)
-2. **Then**: `docs/DEPLOYMENT.md` (comprehensive deployment)
-3. **Then**: `docs/CALIBRATION.md` (sensor calibration)
+1. **Start here**: `HOW_TO_RUN.md` ⭐ **(How to actually run the system)**
+2. **Or quick version**: `QUICKSTART.md` (30-minute basic setup)
+3. **Or full version**: `docs/DEPLOYMENT.md` (comprehensive deployment)
+4. **Then**: `docs/CALIBRATION.md` (sensor calibration)
 
 ### For Configuration
 1. **Home Assistant**: `home-assistant/configuration.yaml` (fully documented)

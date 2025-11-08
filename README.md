@@ -109,6 +109,8 @@ This Garden and Utility Automation project establishes a robust, two-tiered cont
 
 ## 🚀 Quick Start Guide
 
+**→ See `HOW_TO_RUN.md` for complete step-by-step running instructions**
+
 ### Prerequisites
 ```bash
 # Required software on Docker host
