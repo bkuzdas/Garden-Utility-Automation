@@ -32,7 +32,10 @@ Before you begin, you need:
 ### **Step 1: Configure Settings (5 minutes)**
 
 ```bash
-# 1. Navigate to project directory
+# 1. Clone the repository (if you haven't already)
+git clone https://github.com/bkuzdas/Garden-Utility-Automation.git
+
+# 2. Navigate to project directory
 cd Garden-Utility-Automation
 
 # 2. Copy environment template
@@ -594,7 +597,8 @@ docker-compose logs -f [service_name]
 - ESPHome Discord: https://discord.gg/KhAMKrd
 
 ### **Project**
-- GitHub Issues: (Your repository)
+- GitHub Repository: https://github.com/bkuzdas/Garden-Utility-Automation
+- GitHub Issues: https://github.com/bkuzdas/Garden-Utility-Automation/issues
 
 ---
 

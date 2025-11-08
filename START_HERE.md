@@ -135,22 +135,28 @@ This is a **complete system** with:
 
 ---
 
-## 🏃 **Quick Start (In 3 Steps)**
+## 🏃 **Quick Start (In 4 Steps)**
 
 If you just want to get running RIGHT NOW:
 
-### **1. Configure**
+### **1. Clone Repository**
+```bash
+git clone https://github.com/bkuzdas/Garden-Utility-Automation.git
+cd Garden-Utility-Automation
+```
+
+### **2. Configure**
 ```bash
 cp env.example .env
 nano .env  # Fill in WiFi and location
 ```
 
-### **2. Start**
+### **3. Start**
 ```bash
 docker-compose up -d
 ```
 
-### **3. Access**
+### **4. Access**
 ```
 http://YOUR_IP:8123
 ```
@@ -233,7 +239,8 @@ See: `HOW_TO_RUN.md` → "Software Only (No Hardware)" section
 2. **Check logs**: `docker-compose logs -f`
 3. **Check troubleshooting**: `HOW_TO_RUN.md` has solutions
 4. **Community forums**: Home Assistant & ESPHome communities
-5. **GitHub issues**: Open an issue in the repository
+5. **GitHub Repository**: https://github.com/bkuzdas/Garden-Utility-Automation
+6. **GitHub Issues**: https://github.com/bkuzdas/Garden-Utility-Automation/issues
 
 ---
 

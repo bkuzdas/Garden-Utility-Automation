@@ -364,9 +364,10 @@ Every major component includes pseudo code explanations:
 
 1. **Documentation**: Check `/docs` folder first
 2. **Logs**: `docker-compose logs -f [service]`
-3. **Home Assistant Community**: https://community.home-assistant.io/
-4. **ESPHome Discord**: https://discord.gg/KhAMKrd
-5. **GitHub Issues**: Repository issue tracker
+3. **GitHub Repository**: https://github.com/bkuzdas/Garden-Utility-Automation
+4. **GitHub Issues**: https://github.com/bkuzdas/Garden-Utility-Automation/issues
+5. **Home Assistant Community**: https://community.home-assistant.io/
+6. **ESPHome Discord**: https://discord.gg/KhAMKrd
 
 ---
 

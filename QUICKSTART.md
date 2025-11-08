@@ -10,7 +10,7 @@
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/Garden-Utility-Automation.git
+git clone https://github.com/bkuzdas/Garden-Utility-Automation.git
 cd Garden-Utility-Automation
 
 # Copy and edit environment file

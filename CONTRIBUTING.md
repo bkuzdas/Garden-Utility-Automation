@@ -65,7 +65,7 @@ When requesting features:
 
 ## 🔧 Pull Request Process
 
-1. **Fork the repository**
+1. **Fork the repository**: https://github.com/bkuzdas/Garden-Utility-Automation
 2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
 3. **Make your changes**
    - Follow existing code style

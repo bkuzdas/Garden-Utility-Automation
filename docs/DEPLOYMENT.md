@@ -94,7 +94,7 @@ mkdir -p ~/projects
 cd ~/projects
 
 # Clone repository
-git clone https://github.com/yourusername/Garden-Utility-Automation.git
+git clone https://github.com/bkuzdas/Garden-Utility-Automation.git
 cd Garden-Utility-Automation
 
 # Verify structure

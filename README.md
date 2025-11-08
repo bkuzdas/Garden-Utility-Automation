@@ -123,7 +123,7 @@ This Garden and Utility Automation project establishes a robust, two-tiered cont
 
 #### 1. Clone Repository
 ```bash
-git clone https://github.com/yourusername/Garden-Utility-Automation.git
+git clone https://github.com/bkuzdas/Garden-Utility-Automation.git
 cd Garden-Utility-Automation
 ```
 
@@ -320,7 +320,8 @@ MIT License - See LICENSE file for details
 ## 🆘 Support
 
 - **Documentation**: Check `/docs` folder
-- **Issues**: GitHub Issues tracker
+- **Issues**: [GitHub Issues](https://github.com/bkuzdas/Garden-Utility-Automation/issues)
+- **Repository**: https://github.com/bkuzdas/Garden-Utility-Automation
 - **Community**: Home Assistant Community Forums
 
 ---
