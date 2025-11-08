@@ -109,7 +109,8 @@ This Garden and Utility Automation project establishes a robust, two-tiered cont
 
 ## 🚀 Quick Start Guide
 
-**→ See `HOW_TO_RUN.md` for complete step-by-step running instructions**
+**→ Starting from fresh Ubuntu 22.04?** See `COMPLETE_INSTALL_UBUNTU.md` for step-by-step Docker installation  
+**→ Already have Docker?** See `HOW_TO_RUN.md` for complete running instructions
 
 ### Prerequisites
 ```bash
@@ -117,6 +118,8 @@ This Garden and Utility Automation project establishes a robust, two-tiered cont
 - Docker Engine 20.10+
 - Docker Compose 2.0+
 - Git
+
+# Don't have these? See COMPLETE_INSTALL_UBUNTU.md for installation!
 ```
 
 ### Installation Steps

@@ -14,7 +14,24 @@ This is a **complete, production-ready Garden & Utility Automation System** for 
 
 ## 🎯 **Quick Navigation: Pick Your Path**
 
-### **Path 1: Just Want to Run It? (Most Common)**
+### **Path 0: Starting from Fresh Ubuntu 22.04? (Complete Beginner)**
+
+**→ Go to:** `COMPLETE_INSTALL_UBUNTU.md` ⭐⭐⭐
+
+This shows you **EVERYTHING** from scratch:
+- Install Docker on Ubuntu 22.04
+- Install Docker Compose
+- Clone the repository
+- Configure everything
+- Start the system
+- Verify it works
+
+**Time:** 45-60 minutes  
+**Perfect for:** First-time users, fresh Ubuntu installs
+
+---
+
+### **Path 1: Already Have Docker? (Most Common)**
 
 **→ Go to:** `HOW_TO_RUN.md` ⭐
 
@@ -25,7 +42,8 @@ This shows you **exactly** how to:
 - Test the system
 - Troubleshoot issues
 
-**Time:** 30 minutes
+**Time:** 30 minutes  
+**Perfect for:** Users with Docker already installed
 
 ---
 
