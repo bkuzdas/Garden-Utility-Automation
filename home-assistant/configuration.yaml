@@ -1,0 +1,509 @@
+################################################################################
+# HOME ASSISTANT CONFIGURATION
+# Garden & Utility Automation System - Midwest Wisconsin
+# By Brian Kuzdas - 03/02/2024 - Copyright (c) 2024 Brian Kuzdas
+################################################################################
+#
+# PSEUDO CODE LOGIC:
+# 1. Load core Home Assistant with name and location
+# 2. Configure MQTT integration for ESP32 communication
+# 3. Set up weather services (NWS + OpenWeatherMap)
+# 4. Define input helpers for thresholds and settings
+# 5. Import automation packages for modular organization
+# 6. Enable logging, history, and recorder
+# 7. Configure notification platforms
+#
+# COMMON LANGUAGE EXPLANATION:
+# This is the master instruction manual for Home Assistant. It tells HA:
+# - Where you are located (for weather and sunrise/sunset)
+# - How to connect to MQTT (the messaging system)
+# - What weather services to use
+# - Which automation files to load
+# - How to track history and send notifications
+#
+################################################################################
+
+#------------------------------------------------------------------------------
+# CORE CONFIGURATION
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Define Home Assistant instance identity and location
+# COMMON LANGUAGE: Tell HA your home's name and where it is on Earth
+homeassistant:
+  # Human-readable name for this installation
+  name: Garden Automation
+  
+  # PSEUDO CODE: Set geographic coordinates for sun/weather calculations
+  # COMMON LANGUAGE: Your exact location (Wisconsin coordinates)
+  # Used for: sunrise/sunset times, weather forecasts, timezone
+  latitude: !secret latitude
+  longitude: !secret longitude
+  elevation: !secret elevation
+  
+  # PSEUDO CODE: Set measurement system
+  # COMMON LANGUAGE: Use feet, gallons, Fahrenheit (US) or meters, liters, Celsius (metric)
+  unit_system: imperial
+  
+  # PSEUDO CODE: Set timezone for scheduling
+  # COMMON LANGUAGE: Wisconsin is in Central Time
+  time_zone: America/Chicago
+  
+  # PSEUDO CODE: Set currency for any shopping integrations
+  currency: USD
+  
+  # PSEUDO CODE: Define external and internal URLs
+  # COMMON LANGUAGE: How to reach HA from inside and outside your network
+  external_url: !secret ha_external_url
+  internal_url: !secret ha_internal_url
+  
+  # PSEUDO CODE: Load customization file
+  # COMMON LANGUAGE: Load custom names, icons, and settings for entities
+  customize: !include customize.yaml
+  
+  # PSEUDO CODE: Load packages for modular configuration
+  # COMMON LANGUAGE: Load separate config files for organization
+  packages: !include_dir_named packages
+
+#------------------------------------------------------------------------------
+# FRONTEND & USER INTERFACE
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Enable web interface
+# COMMON LANGUAGE: Turn on the dashboard you access through a web browser
+frontend:
+  themes: !include_dir_merge_named themes
+  
+# PSEUDO CODE: Enable configuration through UI
+# COMMON LANGUAGE: Allow changing settings through the web interface (not just YAML)
+config:
+
+# PSEUDO CODE: Enable iOS/Android mobile app integration
+# COMMON LANGUAGE: Allow the Home Assistant mobile app to connect
+mobile_app:
+
+# PSEUDO CODE: Enable person tracking
+# COMMON LANGUAGE: Track which people are home (useful for presence detection)
+person:
+
+# PSEUDO CODE: Enable Lovelace dashboard mode
+# COMMON LANGUAGE: Use the modern card-based UI
+lovelace:
+  mode: yaml
+  dashboards:
+    garden-dashboard:
+      mode: yaml
+      title: Garden Control
+      icon: mdi:sprout
+      show_in_sidebar: true
+      filename: dashboards/garden.yaml
+
+#------------------------------------------------------------------------------
+# MQTT INTEGRATION (CRITICAL FOR ESP32 COMMUNICATION)
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Configure MQTT broker connection
+# COMMON LANGUAGE: Tell HA how to connect to the message broker
+# 
+# MQTT COMMUNICATION FLOW:
+# 1. ESP32 publishes sensor data → MQTT Broker
+# 2. Home Assistant subscribes to topics → receives data
+# 3. Home Assistant publishes commands → MQTT Broker
+# 4. ESP32 subscribes to command topics → receives commands
+mqtt:
+  # PSEUDO CODE: Connect to MQTT broker
+  broker: !secret mqtt_host
+  port: !secret mqtt_port
+  
+  # PSEUDO CODE: Authenticate with username/password
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  
+  # PSEUDO CODE: Set client identifier
+  # COMMON LANGUAGE: Unique name for this HA instance on MQTT
+  client_id: home_assistant_garden
+  
+  # PSEUDO CODE: Enable automatic discovery of devices
+  # COMMON LANGUAGE: ESP32s announce themselves automatically
+  discovery: true
+  discovery_prefix: homeassistant
+  
+  # PSEUDO CODE: Set birth and last will messages
+  # COMMON LANGUAGE: Announce when HA connects/disconnects
+  birth_message:
+    topic: "homeassistant/status"
+    payload: "online"
+    qos: 1
+    retain: true
+  will_message:
+    topic: "homeassistant/status"
+    payload: "offline"
+    qos: 1
+    retain: true
+
+#------------------------------------------------------------------------------
+# WEATHER INTEGRATION (CRITICAL FOR SMART WATERING)
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Configure National Weather Service (Free, US only)
+# COMMON LANGUAGE: Get official weather forecasts from NOAA
+#
+# WEATHER DECISION LOGIC:
+# IF rain_forecast > threshold THEN skip_watering
+# IF temperature < freeze_temp THEN activate_freeze_protection
+# IF wind_speed > threshold THEN skip_watering
+weather:
+  - platform: nws
+    api_key: !secret nws_api_key
+    station: !secret nws_station
+    mode: daynight
+    name: NWS Weather
+
+# PSEUDO CODE: Configure OpenWeatherMap (backup/additional data)
+# COMMON LANGUAGE: Second weather source for comparison
+  - platform: openweathermap
+    api_key: !secret openweather_api_key
+    name: OpenWeather
+    mode: onecall
+
+#------------------------------------------------------------------------------
+# SUN INTEGRATION (FOR SUNRISE/SUNSET AUTOMATIONS)
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Track sun position for scheduling
+# COMMON LANGUAGE: Know when sunrise and sunset occur
+# Used for: watering schedules, light automation
+sun:
+
+#------------------------------------------------------------------------------
+# SENSOR CONFIGURATION
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Define template sensors for calculations
+# COMMON LANGUAGE: Create virtual sensors that calculate values
+sensor:
+  # PSEUDO CODE: Create time/date sensors
+  - platform: time_date
+    display_options:
+      - 'time'
+      - 'date'
+      - 'date_time'
+  
+  # PSEUDO CODE: Calculate watering adjustment based on temperature
+  # COMMON LANGUAGE: Adjust watering time longer when hot, shorter when cool
+  # 
+  # ADJUSTMENT FORMULA:
+  # IF temp < 60°F THEN duration = base_duration * 0.7
+  # IF temp 60-75°F THEN duration = base_duration * 1.0
+  # IF temp > 75°F THEN duration = base_duration * 1.3
+  - platform: template
+    sensors:
+      watering_duration_adjustment:
+        friendly_name: "Watering Duration Adjustment"
+        unit_of_measurement: "%"
+        value_template: >
+          {% set temp = states('sensor.nws_weather_temperature') | float(70) %}
+          {% if temp < 60 %}
+            70
+          {% elif temp < 75 %}
+            100
+          {% else %}
+            130
+          {% endif %}
+      
+      # PSEUDO CODE: Calculate if watering should be skipped today
+      # COMMON LANGUAGE: Decide if conditions are good for watering
+      should_water_today:
+        friendly_name: "Should Water Today"
+        value_template: >
+          {% set rain_forecast = state_attr('weather.nws_weather', 'forecast')[0].precipitation | float(0) %}
+          {% set wind_speed = states('sensor.nws_weather_wind_speed') | float(0) %}
+          {% set temp = states('sensor.nws_weather_temperature') | float(70) %}
+          {% set freeze_temp = states('input_number.freeze_warning_temp') | float(35) %}
+          {% set rain_threshold = states('input_number.rain_skip_threshold') | float(0.2) %}
+          {% set wind_threshold = states('input_number.wind_skip_threshold') | float(15) %}
+          
+          {# DECISION TREE:
+             IF temperature below freezing THEN don't water (freeze risk)
+             ELSE IF rain forecast exceeds threshold THEN don't water (save water)
+             ELSE IF wind too high THEN don't water (inefficient)
+             ELSE water
+          #}
+          {% if temp < freeze_temp %}
+            false
+          {% elif rain_forecast > rain_threshold %}
+            false
+          {% elif wind_speed > wind_threshold %}
+            false
+          {% else %}
+            true
+          {% endif %}
+
+#------------------------------------------------------------------------------
+# BINARY SENSOR CONFIGURATION
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Define on/off sensors
+# COMMON LANGUAGE: Sensors that are either ON or OFF (no in-between)
+binary_sensor:
+  # PSEUDO CODE: Check if it's watering season
+  # COMMON LANGUAGE: Is it warm enough to water? (April-October in Wisconsin)
+  - platform: template
+    sensors:
+      watering_season:
+        friendly_name: "Watering Season"
+        device_class: season
+        value_template: >
+          {% set month = now().month %}
+          {{ month >= 4 and month <= 10 }}
+
+#------------------------------------------------------------------------------
+# INPUT HELPERS (USER-ADJUSTABLE SETTINGS)
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Create input fields for user settings
+# COMMON LANGUAGE: Sliders and switches you can adjust in the UI
+
+input_number:
+  # PSEUDO CODE: Soil moisture thresholds
+  # COMMON LANGUAGE: How dry before watering starts
+  soil_moisture_low_threshold:
+    name: Soil Moisture Low Threshold
+    min: 0
+    max: 100
+    step: 5
+    unit_of_measurement: "%"
+    icon: mdi:water-percent
+  
+  soil_moisture_high_threshold:
+    name: Soil Moisture High Threshold
+    min: 0
+    max: 100
+    step: 5
+    unit_of_measurement: "%"
+    icon: mdi:water-percent
+  
+  # PSEUDO CODE: Temperature thresholds
+  freeze_warning_temp:
+    name: Freeze Warning Temperature
+    min: 25
+    max: 40
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-alert
+  
+  # PSEUDO CODE: Watering duration per zone
+  default_watering_duration:
+    name: Default Watering Duration
+    min: 1
+    max: 60
+    step: 1
+    unit_of_measurement: "min"
+    icon: mdi:timer
+  
+  # PSEUDO CODE: Weather skip thresholds
+  rain_skip_threshold:
+    name: Rain Skip Threshold
+    min: 0
+    max: 1
+    step: 0.05
+    unit_of_measurement: "in"
+    icon: mdi:weather-rainy
+  
+  wind_skip_threshold:
+    name: Wind Skip Threshold
+    min: 0
+    max: 30
+    step: 1
+    unit_of_measurement: "mph"
+    icon: mdi:weather-windy
+
+input_boolean:
+  # PSEUDO CODE: Master enable switches
+  # COMMON LANGUAGE: On/off switches for major features
+  master_watering_enable:
+    name: Master Watering Enable
+    icon: mdi:water
+  
+  freeze_protection_enable:
+    name: Freeze Protection Enable
+    icon: mdi:snowflake-alert
+  
+  leak_detection_enable:
+    name: Leak Detection Enable
+    icon: mdi:pipe-leak
+
+input_datetime:
+  # PSEUDO CODE: Watering schedule times
+  # COMMON LANGUAGE: What time to water each day
+  morning_watering_time:
+    name: Morning Watering Time
+    has_date: false
+    has_time: true
+  
+  evening_watering_time:
+    name: Evening Watering Time
+    has_date: false
+    has_time: true
+
+#------------------------------------------------------------------------------
+# RECORDER & HISTORY
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Configure database recording
+# COMMON LANGUAGE: What to remember and for how long
+recorder:
+  # PSEUDO CODE: Keep history for X days
+  purge_keep_days: 30
+  
+  # PSEUDO CODE: Commit changes every X seconds
+  commit_interval: 1
+  
+  # PSEUDO CODE: Exclude noisy entities
+  # COMMON LANGUAGE: Don't record things that change constantly
+  exclude:
+    domains:
+      - automation
+      - updater
+    entity_globs:
+      - sensor.time*
+      - sensor.date*
+
+# PSEUDO CODE: Enable history panel
+history:
+
+# PSEUDO CODE: Enable logbook (event history)
+logbook:
+  exclude:
+    domains:
+      - automation
+
+#------------------------------------------------------------------------------
+# LOGGER
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Configure logging verbosity
+# COMMON LANGUAGE: How much detail to log
+# Levels: debug, info, warning, error, critical
+logger:
+  default: info
+  logs:
+    homeassistant.core: warning
+    homeassistant.components.mqtt: info
+    homeassistant.components.automation: info
+
+#------------------------------------------------------------------------------
+# NOTIFICATION PLATFORMS
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Configure notification services
+# COMMON LANGUAGE: How to send alerts (email, push, etc.)
+notify:
+  # PSEUDO CODE: Email notifications
+  - name: email
+    platform: smtp
+    server: !secret smtp_server
+    port: !secret smtp_port
+    timeout: 15
+    sender: !secret smtp_sender
+    encryption: starttls
+    username: !secret smtp_username
+    password: !secret smtp_password
+    recipient:
+      - !secret smtp_recipient
+    sender_name: Garden Automation
+
+#------------------------------------------------------------------------------
+# AUTOMATION, SCRIPT, SCENE IMPORTS
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Import automation rules
+# COMMON LANGUAGE: Load the if-this-then-that rules
+automation: !include automations.yaml
+
+# PSEUDO CODE: Import reusable scripts
+# COMMON LANGUAGE: Load pre-written action sequences
+script: !include scripts.yaml
+
+# PSEUDO CODE: Import scenes
+# COMMON LANGUAGE: Load saved states
+scene: !include scenes.yaml
+
+#------------------------------------------------------------------------------
+# ZONE DEFINITIONS (Geographic areas)
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Define home zone for presence detection
+zone:
+  - name: Home
+    latitude: !secret latitude
+    longitude: !secret longitude
+    radius: 100
+    icon: mdi:home
+
+#------------------------------------------------------------------------------
+# HTTP & API CONFIGURATION
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Configure web server
+http:
+  # PSEUDO CODE: Use X-Forwarded-For headers (for reverse proxy)
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
+
+#------------------------------------------------------------------------------
+# SYSTEM HEALTH
+#------------------------------------------------------------------------------
+
+# PSEUDO CODE: Enable system health monitoring
+system_health:
+
+# PSEUDO CODE: Enable energy dashboard
+energy:
+
+################################################################################
+# CONFIGURATION VALIDATION & LOADING PSEUDO CODE
+################################################################################
+#
+# ON_HOME_ASSISTANT_START:
+#   VALIDATE configuration.yaml syntax
+#   IF syntax errors THEN
+#     WRITE errors to log
+#     DISPLAY error message in UI
+#     HALT startup
+#   END IF
+#   
+#   LOAD secrets from secrets.yaml
+#   IF secrets missing THEN
+#     LOG warning
+#     USE default values where possible
+#   END IF
+#   
+#   CONNECT to MQTT broker
+#   WHILE not connected AND retries < 10:
+#     TRY connect
+#     IF connection fails THEN
+#       WAIT 5 seconds
+#       INCREMENT retries
+#     END IF
+#   END WHILE
+#   
+#   LOAD weather integrations
+#   FETCH initial weather data
+#   
+#   INITIALIZE input helpers with saved values
+#   
+#   LOAD automation files
+#   FOR EACH automation:
+#     VALIDATE conditions and actions
+#     REGISTER triggers
+#   END FOR
+#   
+#   START automation engine
+#   LOG "Home Assistant started successfully"
+#
+################################################################################
+
+# END OF HOME ASSISTANT CONFIGURATION
+

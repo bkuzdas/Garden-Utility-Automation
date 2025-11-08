@@ -1,0 +1,72 @@
+################################################################################
+# HOME ASSISTANT ENTITY CUSTOMIZATIONS
+# Override default names, icons, and attributes
+# By Brian Kuzdas - 03/02/2024 - Copyright (c) 2024 Brian Kuzdas
+################################################################################
+#
+# PSEUDO CODE CONCEPT:
+# FOR EACH entity you want to customize:
+#   SET friendly_name (human-readable name)
+#   SET icon (from https://materialdesignicons.com)
+#   SET device_class (for proper UI rendering)
+#   SET other attributes as needed
+# END FOR
+#
+# COMMON LANGUAGE:
+# This file makes your entities look nice in the UI with custom names
+# and icons. Instead of "sensor.zone_a_soil_moisture" showing as
+# "Zone A Soil Moisture", you can rename it to "🌱 Vegetable Garden Soil"
+#
+################################################################################
+
+# Zone A Entities
+sensor.zone_a_soil_moisture:
+  friendly_name: "Zone A Soil Moisture"
+  icon: mdi:water-percent
+
+sensor.zone_a_flow_rate:
+  friendly_name: "Zone A Flow Rate"
+  icon: mdi:water
+
+switch.zone_a_valve:
+  friendly_name: "Zone A Valve"
+  icon: mdi:pipe-valve
+
+# Zone B Entities
+sensor.zone_b_soil_moisture:
+  friendly_name: "Zone B Soil Moisture"
+  icon: mdi:water-percent
+
+sensor.zone_b_flow_rate:
+  friendly_name: "Zone B Flow Rate"
+  icon: mdi:water
+
+switch.zone_b_valve:
+  friendly_name: "Zone B Valve"
+  icon: mdi:pipe-valve
+
+# Utility Entities
+sensor.water_tank_level:
+  friendly_name: "Water Tank Level"
+  icon: mdi:water-well
+
+sensor.main_flow_rate:
+  friendly_name: "Main Line Flow"
+  icon: mdi:water-pump
+
+switch.water_pump:
+  friendly_name: "Water Pump"
+  icon: mdi:pump
+
+switch.main_water_valve:
+  friendly_name: "Main Water Valve"
+  icon: mdi:valve
+
+# Weather
+weather.nws_weather:
+  friendly_name: "Wisconsin Weather"
+  
+sensor.nws_weather_temperature:
+  friendly_name: "Outdoor Temperature"
+  icon: mdi:thermometer
+

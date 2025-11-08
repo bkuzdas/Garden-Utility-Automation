@@ -1,0 +1,635 @@
+################################################################################
+# ESP32 UTILITY CONTROLLER
+# Controls water pump, main valve, and monitors tank levels
+# By Brian Kuzdas - 03/02/2024 - Copyright (c) 2024 Brian Kuzdas
+################################################################################
+#
+# PSEUDO CODE OVERVIEW:
+# 1. Define ESP32 board and identification
+# 2. Monitor water tank level (ultrasonic or float sensor)
+# 3. Monitor main line flow sensor (leak detection)
+# 4. Control water pump (relay with safety interlocks)
+# 5. Control main water shutoff valve (emergency)
+# 6. Implement pump protection (dry-run prevention, max runtime)
+# 7. Implement emergency shutdown logic
+#
+# COMMON LANGUAGE EXPLANATION:
+# This ESP32 is the "utility manager" that handles the big picture:
+# - Monitors the water tank/reservoir level
+# - Controls the pump that moves water from tank to zones
+# - Monitors the main water line for leaks
+# - Can shut off the main water valve in an emergency
+# - Has smart protection to prevent pump damage
+#
+# HARDWARE CONNECTIONS:
+# - GPIO 23: Ultrasonic sensor trigger (tank level)
+# - GPIO 22: Ultrasonic sensor echo (tank level)
+# - GPIO 32: Main line flow sensor (pulse counting)
+# - GPIO 33: Water pump relay (high current)
+# - GPIO 14: Main water valve relay (emergency shutoff)
+# - GPIO 13: Optional: Tank refill valve relay
+#
+################################################################################
+
+#------------------------------------------------------------------------------
+# DEVICE IDENTIFICATION
+#------------------------------------------------------------------------------
+
+esphome:
+  name: esp32-utility-control
+  friendly_name: "Utility Controller"
+  
+  # PSEUDO CODE: Run safety checks on boot
+  # COMMON LANGUAGE: When starting up, make sure everything is safe
+  on_boot:
+    priority: -10
+    then:
+      # Safety: Turn off pump on startup
+      - switch.turn_off: water_pump
+      # Safety: Ensure main valve is open (unless emergency)
+      - switch.turn_on: main_water_valve
+      - logger.log: "Utility controller started - pump off, main valve open"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+#------------------------------------------------------------------------------
+# IMPORT COMMON CONFIGURATION
+#------------------------------------------------------------------------------
+
+<<: !include common/common.yaml
+
+#------------------------------------------------------------------------------
+# SENSORS
+#------------------------------------------------------------------------------
+
+sensor:
+  
+  #----------------------------------------------------------------------------
+  # WATER TANK LEVEL (Ultrasonic Distance Sensor)
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # SEND ultrasonic ping from trigger pin
+  # MEASURE echo time on echo pin
+  # CALCULATE distance = (echo_time * speed_of_sound) / 2
+  # CONVERT distance to tank level percentage
+  #   tank_percent = (tank_height - distance) / tank_height * 100
+  #
+  # COMMON LANGUAGE:
+  # An ultrasonic sensor shoots sound waves down into the tank and listens
+  # for the echo. By measuring how long it takes for the echo to return,
+  # we can calculate the distance to the water surface. We convert that
+  # distance to a percentage (0% = empty, 100% = full).
+  #
+  # CALIBRATION REQUIRED:
+  # 1. Measure tank height from sensor to bottom (e.g., 100cm)
+  # 2. Measure distance when tank is empty (e.g., 98cm, allowing for sensor offset)
+  # 3. Measure distance when tank is full (e.g., 10cm from sensor)
+  # 4. Update values below
+  #----------------------------------------------------------------------------
+  
+  - platform: ultrasonic
+    trigger_pin: GPIO23
+    echo_pin: GPIO22
+    name: "Water Tank Distance"
+    id: tank_distance_raw
+    update_interval: 10s
+    timeout: 3m  # 3 meters max range
+    internal: true
+    
+    # PSEUDO CODE: Apply filtering to stabilize readings
+    filters:
+      # Average multiple readings (water surface may ripple)
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 5
+      
+      # Clamp to reasonable range
+      - lambda: |
+          if (x < 0.1) return 0.1;  // Minimum 10cm
+          if (x > 2.0) return 2.0;  // Maximum 200cm
+          return x;
+  
+  # PSEUDO CODE: Convert distance to percentage
+  # COMMON LANGUAGE: Turn distance measurement into easy-to-understand percentage
+  - platform: template
+    name: "Water Tank Level"
+    id: water_tank_level
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery  # Uses battery icon (0-100%)
+    icon: "mdi:water-well"
+    update_interval: 30s
+    
+    # PSEUDO CODE: Calculate percentage
+    # FORMULA: level% = (max_distance - current_distance) / (max_distance - min_distance) * 100
+    lambda: |-
+      // CALIBRATION VALUES - Adjust for your tank
+      float tank_height = 1.00;        // Tank height in meters (100cm)
+      float sensor_to_full = 0.10;     // Distance to water when tank full (10cm)
+      float sensor_to_empty = 0.98;    // Distance to water when tank empty (98cm)
+      
+      float current_distance = id(tank_distance_raw).state;
+      float usable_height = sensor_to_empty - sensor_to_full;
+      float current_level = sensor_to_empty - current_distance;
+      float percentage = (current_level / usable_height) * 100.0;
+      
+      // Clamp to 0-100%
+      if (percentage < 0) return 0.0;
+      if (percentage > 100) return 100.0;
+      return percentage;
+  
+  #----------------------------------------------------------------------------
+  # MAIN LINE FLOW SENSOR (Leak Detection)
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # COUNT pulses from main line flow sensor
+  # CALCULATE total water usage
+  # DETECT leaks (unexpected flow)
+  #
+  # COMMON LANGUAGE:
+  # This flow sensor is on the main water line before it splits to zones.
+  # It measures ALL water flowing through the system. If water flows when
+  # no zones are active, we have a leak somewhere.
+  #----------------------------------------------------------------------------
+  
+  - platform: pulse_counter
+    pin:
+      number: GPIO32
+      mode:
+        input: true
+        pullup: true
+    name: "Main Line Flow Rate"
+    id: main_flow_rate
+    unit_of_measurement: "L/min"
+    accuracy_decimals: 2
+    icon: "mdi:water-pump"
+    update_interval: 5s
+    
+    # PSEUDO CODE: Calculate flow rate (calibrate for your sensor)
+    filters:
+      - multiply: 0.1333  # YF-S201 calibration factor
+    
+    # PSEUDO CODE: Track total usage
+    total:
+      name: "Main Line Total Water Used"
+      unit_of_measurement: "L"
+      accuracy_decimals: 1
+      filters:
+        - multiply: 0.00222
+  
+  #----------------------------------------------------------------------------
+  # PUMP CURRENT SENSOR (Optional but recommended)
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # MEASURE current drawn by pump
+  # DETECT dry-run condition (low current = no water load)
+  # DETECT overload condition (high current = pump strain)
+  #
+  # COMMON LANGUAGE:
+  # By measuring how much electrical current the pump uses, we can tell
+  # if it's working correctly. Too little current means it's running dry
+  # (no water), too much means it's straining (clog or mechanical problem).
+  #
+  # REQUIRES: ACS712 current sensor or similar
+  #----------------------------------------------------------------------------
+  
+  # - platform: adc
+  #   pin: GPIO35
+  #   name: "Pump Current"
+  #   id: pump_current
+  #   attenuation: 11db
+  #   update_interval: 1s
+  #   filters:
+  #     # ACS712 20A calibration: 100mV per Amp, centered at 2.5V
+  #     - lambda: |
+  #         float voltage = x;
+  #         float current = (voltage - 2.5) / 0.1;  // Convert to amps
+  #         return abs(current);
+  #   unit_of_measurement: "A"
+  #   accuracy_decimals: 2
+  
+  #----------------------------------------------------------------------------
+  # SYSTEM UPTIME
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE: Track how long ESP32 has been running
+  # COMMON LANGUAGE: Shows if ESP32 is rebooting unexpectedly
+  - platform: uptime
+    name: "Utility Controller Uptime"
+    update_interval: 60s
+  
+  #----------------------------------------------------------------------------
+  # WIFI SIGNAL STRENGTH
+  #----------------------------------------------------------------------------
+  - platform: wifi_signal
+    name: "Utility Controller WiFi Signal"
+    update_interval: 60s
+
+#------------------------------------------------------------------------------
+# BINARY SENSORS
+#------------------------------------------------------------------------------
+
+binary_sensor:
+  
+  # PSEUDO CODE: Report connection status
+  - platform: status
+    name: "Utility Controller Status"
+  
+  #----------------------------------------------------------------------------
+  # TANK LOW LEVEL ALARM
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # IF tank_level < 20% THEN:
+  #   ALARM = ON (tank needs refilling)
+  # ELSE:
+  #   ALARM = OFF
+  # END IF
+  #
+  # COMMON LANGUAGE:
+  # Alert when tank is running low so it can be refilled
+  #----------------------------------------------------------------------------
+  
+  - platform: template
+    name: "Tank Low Level"
+    id: tank_low
+    device_class: problem
+    
+    lambda: |-
+      return id(water_tank_level).state < 20.0;
+  
+  #----------------------------------------------------------------------------
+  # PUMP DRY RUN DETECTION
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # IF pump is ON AND tank_level < 10% THEN:
+  #   DRY_RUN = TRUE (pump running with no water)
+  # ELSE:
+  #   DRY_RUN = FALSE
+  # END IF
+  #
+  # COMMON LANGUAGE:
+  # Detect if pump is trying to run when tank is empty. Running a pump
+  # dry will destroy it quickly, so this is critical protection.
+  #----------------------------------------------------------------------------
+  
+  - platform: template
+    name: "Pump Dry Run Detected"
+    id: pump_dry_run
+    device_class: problem
+    
+    lambda: |-
+      // Dry run if pump is on but tank is nearly empty
+      if (id(water_pump).state && id(water_tank_level).state < 10.0) {
+        return true;  // Dry run!
+      }
+      return false;
+  
+  #----------------------------------------------------------------------------
+  # MAIN LINE LEAK DETECTION
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # IF flow_rate > threshold AND all_zones_closed THEN:
+  #   LEAK = TRUE (water flowing but shouldn't be)
+  # ELSE:
+  #   LEAK = FALSE
+  # END IF
+  #
+  # COMMON LANGUAGE:
+  # If water is flowing through the main line but no zones are supposed
+  # to be watering, there's a leak somewhere in the system.
+  #----------------------------------------------------------------------------
+  
+  - platform: template
+    name: "Main Line Leak Detected"
+    id: main_leak
+    device_class: problem
+    
+    lambda: |-
+      // Leak if flow detected but pump is off
+      if (!id(water_pump).state && id(main_flow_rate).state > 1.0) {
+        return true;  // Leak!
+      }
+      return false;
+
+#------------------------------------------------------------------------------
+# SWITCHES
+#------------------------------------------------------------------------------
+
+switch:
+  
+  #----------------------------------------------------------------------------
+  # WATER PUMP CONTROL
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # DEFINE relay controlling water pump
+  # IMPLEMENT safety interlocks:
+  #   - Don't start if tank is low
+  #   - Auto-shutoff if dry run detected
+  #   - Maximum runtime limit
+  #   - Current monitoring (if equipped)
+  #
+  # COMMON LANGUAGE:
+  # This controls the pump that moves water from the reservoir to the
+  # watering zones. It has multiple safety features to prevent damage.
+  #----------------------------------------------------------------------------
+  
+  - platform: gpio
+    pin: GPIO33
+    name: "Water Pump"
+    id: water_pump
+    icon: "mdi:water-pump"
+    restore_mode: ALWAYS_OFF
+    
+    # PSEUDO CODE: Pre-start safety checks
+    on_turn_on:
+      then:
+        # CHECK 1: Verify adequate water in tank
+        - if:
+            condition:
+              lambda: 'return id(water_tank_level).state < 15.0;'
+            then:
+              - logger.log: "ERROR: Cannot start pump - tank level too low"
+              - switch.turn_off: water_pump
+              - homeassistant.service:
+                  service: notify.email
+                  data:
+                    title: "⚠️ Pump Start Prevented"
+                    message: "Pump start prevented - tank level below 15%"
+            else:
+              - logger.log: "Pump started - tank level OK"
+              
+              # SAFETY: Maximum runtime (30 minutes)
+              - delay: 30min
+              - switch.turn_off: water_pump
+              - logger.log: "Pump auto-stopped (timeout)"
+    
+    on_turn_off:
+      then:
+        - logger.log: "Pump stopped"
+  
+  #----------------------------------------------------------------------------
+  # MAIN WATER VALVE (Emergency Shutoff)
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # DEFINE motorized ball valve control
+  # NORMALLY OPEN (allows water flow)
+  # CLOSE ONLY in emergency (leak detected)
+  #
+  # COMMON LANGUAGE:
+  # This is an emergency shutoff valve on the main water line. Normally
+  # it stays open. If a major leak is detected, it automatically closes
+  # to prevent flooding.
+  #
+  # HARDWARE NOTE: Motorized ball valves need time to open/close (5-30 sec)
+  #----------------------------------------------------------------------------
+  
+  - platform: gpio
+    pin: GPIO14
+    name: "Main Water Valve"
+    id: main_water_valve
+    icon: "mdi:valve"
+    restore_mode: RESTORE_DEFAULT_ON  # Default to open (ON) on boot
+    inverted: false  # Adjust based on your valve: ON = open, OFF = closed
+    
+    on_turn_on:
+      then:
+        - logger.log: "Main valve opening"
+        # Wait for valve to fully open (adjust for your valve)
+        - delay: 10s
+        - logger.log: "Main valve fully open"
+    
+    on_turn_off:
+      then:
+        - logger.log: "EMERGENCY: Main valve closing"
+        # Wait for valve to fully close
+        - delay: 10s
+        - logger.log: "EMERGENCY: Main valve fully closed"
+        - homeassistant.service:
+            service: notify.email
+            data:
+              title: "🚨 MAIN VALVE CLOSED"
+              message: "Main water valve has been closed due to emergency condition"
+  
+  #----------------------------------------------------------------------------
+  # TANK REFILL VALVE (Optional)
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # DEFINE valve that refills tank from main water supply
+  # OPEN when tank is low
+  # CLOSE when tank is full
+  # WITH overflow protection
+  #
+  # COMMON LANGUAGE:
+  # If using a reservoir/tank that needs refilling from municipal water,
+  # this valve automates that process. Opens when tank is low, closes
+  # when full.
+  #----------------------------------------------------------------------------
+  
+  # - platform: gpio
+  #   pin: GPIO13
+  #   name: "Tank Refill Valve"
+  #   id: tank_refill_valve
+  #   icon: "mdi:pipe-valve"
+  #   restore_mode: ALWAYS_OFF
+  #   
+  #   on_turn_on:
+  #     then:
+  #       - logger.log: "Tank refill started"
+  #       
+  #       # SAFETY: Maximum refill time (prevent overflow)
+  #       - delay: 60min
+  #       - switch.turn_off: tank_refill_valve
+  #       - logger.log: "Tank refill auto-stopped (timeout)"
+  #   
+  #   on_turn_off:
+  #     then:
+  #       - logger.log: "Tank refill stopped"
+
+#------------------------------------------------------------------------------
+# AUTOMATIONS (LOCAL ESP32 LOGIC)
+#------------------------------------------------------------------------------
+
+# These automations run ON the ESP32 for fast, reliable safety responses
+
+#------------------------------------------------------------------------------
+# AUTOMATION 1: Pump Dry-Run Protection
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# EVERY 1 second:
+#   IF pump is running AND tank_level < 10% THEN:
+#     EMERGENCY STOP pump
+#     LOG critical error
+#     SEND alert to HA
+#   END IF
+#
+# COMMON LANGUAGE:
+# Check constantly if pump is running dry. If detected, shut it down
+# immediately (within 1 second) to prevent damage.
+#------------------------------------------------------------------------------
+
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: 'return id(pump_dry_run).state;'
+          then:
+            - switch.turn_off: water_pump
+            - logger.log: "CRITICAL: Pump dry run detected - emergency stop"
+            - homeassistant.service:
+                service: notify.email
+                data:
+                  title: "🚨 PUMP DRY RUN - STOPPED"
+                  message: "Pump was running with low tank level. Pump stopped automatically."
+
+#------------------------------------------------------------------------------
+# AUTOMATION 2: Tank Refill Automation (if using refill valve)
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# EVERY 30 seconds:
+#   IF tank_level < 30% AND refill_valve is OFF THEN:
+#     OPEN refill_valve (start refilling)
+#   ELSE IF tank_level > 90% AND refill_valve is ON THEN:
+#     CLOSE refill_valve (stop refilling)
+#   END IF
+#
+# COMMON LANGUAGE:
+# Automatically maintain tank level between 30-90%. When low, start
+# refilling. When high, stop refilling.
+#------------------------------------------------------------------------------
+
+# - interval: 30s
+#   then:
+#     # Start refill if tank is low
+#     - if:
+#         condition:
+#           and:
+#             - lambda: 'return id(water_tank_level).state < 30.0;'
+#             - lambda: 'return !id(tank_refill_valve).state;'
+#         then:
+#           - switch.turn_on: tank_refill_valve
+#           - logger.log: "Tank low - starting refill"
+#     
+#     # Stop refill if tank is full
+#     - if:
+#         condition:
+#           and:
+#             - lambda: 'return id(water_tank_level).state > 90.0;'
+#             - lambda: 'return id(tank_refill_valve).state;'
+#         then:
+#           - switch.turn_off: tank_refill_valve
+#           - logger.log: "Tank full - stopping refill"
+
+################################################################################
+# SYSTEM OPERATION PSEUDO CODE
+################################################################################
+#
+# PUMP_OPERATION_SEQUENCE:
+#   // Triggered by Home Assistant or automation
+#   
+#   ON pump_start_request:
+#     // Pre-start safety checks
+#     CHECK tank_level >= 15%
+#     IF not sufficient THEN:
+#       ABORT pump start
+#       LOG error
+#       NOTIFY user
+#       RETURN
+#     END IF
+#     
+#     CHECK no active alarms (leaks, etc.)
+#     IF alarms present THEN:
+#       ABORT pump start
+#       LOG error
+#       NOTIFY user
+#       RETURN
+#     END IF
+#     
+#     // Start pump
+#     ENERGIZE pump relay (GPIO33 HIGH)
+#     LOG "Pump started"
+#     START safety timer (30 minutes)
+#     START monitoring loop
+#     
+#     WHILE pump is running:
+#       EVERY 1 second:
+#         CHECK tank_level >= 10%
+#         IF tank too low THEN:
+#           EMERGENCY_STOP_PUMP()
+#           LOG "Dry run detected"
+#           BREAK
+#         END IF
+#         
+#         CHECK pump_current (if equipped)
+#         IF current too high THEN:
+#           EMERGENCY_STOP_PUMP()
+#           LOG "Overload detected"
+#           BREAK
+#         ELSE IF current too low THEN:
+#           EMERGENCY_STOP_PUMP()
+#           LOG "No load detected"
+#           BREAK
+#         END IF
+#       END EVERY
+#       
+#       IF safety_timer expired THEN:
+#         STOP_PUMP()
+#         LOG "Maximum runtime reached"
+#         BREAK
+#       END IF
+#     END WHILE
+#   
+#   ON pump_stop_request:
+#     DE-ENERGIZE pump relay (GPIO33 LOW)
+#     CANCEL safety timer
+#     STOP monitoring loop
+#     LOG "Pump stopped"
+#
+# TANK_MONITORING_LOGIC:
+#   EVERY 10 seconds:
+#     TRIGGER ultrasonic sensor
+#     MEASURE echo time
+#     CALCULATE distance
+#     APPLY filtering (5-sample average)
+#     CONVERT to percentage
+#     PUBLISH to Home Assistant
+#     
+#     IF percentage < 20% THEN:
+#       SET tank_low_alarm = TRUE
+#     ELSE:
+#       SET tank_low_alarm = FALSE
+#     END IF
+#     
+#     IF percentage < 10% AND pump_running THEN:
+#       TRIGGER dry_run_protection()
+#     END IF
+#
+# LEAK_DETECTION_LOGIC:
+#   EVERY 5 seconds:
+#     READ main_flow_rate
+#     READ pump_state
+#     READ all_zone_valve_states (from HA)
+#     
+#     EXPECTED_FLOW = 0
+#     IF pump_running THEN:
+#       FOR EACH zone_valve:
+#         IF zone_valve.state == ON THEN:
+#           EXPECTED_FLOW += zone_nominal_flow
+#         END IF
+#       END FOR
+#     END IF
+#     
+#     FLOW_DEVIATION = abs(main_flow_rate - EXPECTED_FLOW)
+#     
+#     IF FLOW_DEVIATION > 5.0 L/min FOR 10 seconds THEN:
+#       SET leak_detected = TRUE
+#       PUBLISH alert to HA
+#       HA automation handles emergency response
+#     ELSE:
+#       SET leak_detected = FALSE
+#     END IF
+#
+################################################################################
+

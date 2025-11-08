@@ -1,0 +1,326 @@
+################################################################################
+# ESPHOME COMMON CONFIGURATION
+# Shared settings for all ESP32 controllers
+# By Brian Kuzdas - 03/02/2024 - Copyright (c) 2024 Brian Kuzdas
+################################################################################
+#
+# PSEUDO CODE LOGIC:
+# This file contains settings that are identical across all ESP32 devices:
+# 1. WiFi configuration with fallback AP
+# 2. API configuration for Home Assistant communication
+# 3. OTA (Over-The-Air) update configuration
+# 4. Logging settings
+# 5. Web server for local access
+#
+# COMMON LANGUAGE EXPLANATION:
+# This is like a template that all ESP32 devices share. Instead of writing
+# the same WiFi password and settings in every device config, we write it
+# once here and all devices use it. Makes updates much easier!
+#
+# USAGE:
+# In individual ESP32 configs, include this file:
+#   <<: !include common/common.yaml
+#
+################################################################################
+
+#------------------------------------------------------------------------------
+# WIFI CONFIGURATION
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# TRY to connect to main WiFi network
+# IF connection fails after X attempts THEN:
+#   CREATE fallback access point (AP)
+#   ALLOW user to reconfigure WiFi from phone
+# END IF
+#
+# COMMON LANGUAGE:
+# Connect to your home WiFi. If it can't connect (wrong password, router
+# off, etc.), the ESP32 creates its own WiFi network that you can connect
+# to from your phone to fix the settings.
+#------------------------------------------------------------------------------
+
+wifi:
+  # PSEUDO CODE: Primary WiFi credentials
+  # COMMON LANGUAGE: Your home WiFi network name and password
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  # PSEUDO CODE: Enable fast connection for quicker reconnects
+  # COMMON LANGUAGE: Remember the WiFi channel and MAC address to reconnect faster
+  fast_connect: true
+  
+  # PSEUDO CODE: Set WiFi transmission power (if needed)
+  # COMMON LANGUAGE: Adjust signal strength (higher = stronger signal, more power)
+  # Default: 20dBm (full power), reduce if ESP32 is close to router
+  # power_save_mode: light
+  
+  # PSEUDO CODE: Fallback hotspot configuration
+  # COMMON LANGUAGE: If can't connect to WiFi, become a WiFi hotspot yourself
+  ap:
+    ssid: "Garden ESP32 Fallback"
+    password: !secret wifi_ap_password
+
+# PSEUDO CODE: Enable captive portal for WiFi reconfiguration
+# COMMON LANGUAGE: When in fallback mode, show setup page automatically
+captive_portal:
+
+#------------------------------------------------------------------------------
+# HOME ASSISTANT API CONFIGURATION
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# ENABLE native API for Home Assistant communication
+# USE encryption for security
+# AUTHENTICATE with password
+#
+# COMMON LANGUAGE:
+# This allows Home Assistant to talk directly to the ESP32 without MQTT.
+# It's faster and more efficient than MQTT for most sensors. The connection
+# is encrypted so no one can snoop on your data.
+#
+# COMMUNICATION FLOW:
+# ESP32 → (WiFi, encrypted) → Home Assistant
+# Home Assistant → (WiFi, encrypted) → ESP32
+#------------------------------------------------------------------------------
+
+api:
+  # PSEUDO CODE: Enable encrypted communication
+  # COMMON LANGUAGE: Scramble messages so only HA can read them
+  encryption:
+    key: !secret esphome_api_key
+  
+  # PSEUDO CODE: Set reconnection retry strategy
+  # COMMON LANGUAGE: If connection drops, keep trying to reconnect
+  reboot_timeout: 15min
+  
+  # PSEUDO CODE: Define services that HA can call
+  # COMMON LANGUAGE: Custom commands that Home Assistant can send to this ESP32
+  services:
+    # SERVICE: Manual valve control
+    - service: open_valve
+      variables:
+        valve_id: string
+      then:
+        - switch.turn_on:
+            id: !lambda 'return valve_id;'
+    
+    - service: close_valve
+      variables:
+        valve_id: string
+      then:
+        - switch.turn_off:
+            id: !lambda 'return valve_id;'
+
+#------------------------------------------------------------------------------
+# OTA (OVER-THE-AIR) UPDATE CONFIGURATION
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# ENABLE wireless firmware updates
+# REQUIRE password for security
+#
+# COMMON LANGUAGE:
+# After the first time you plug in the ESP32 via USB, all future updates
+# can be done wirelessly over WiFi. No need to physically access the device!
+# Password prevents unauthorized people from uploading malicious firmware.
+#
+# UPDATE PROCESS:
+# 1. Edit ESP32 YAML file in ESPHome Dashboard
+# 2. Click "Upload"
+# 3. Choose "Wirelessly"
+# 4. ESPHome compiles firmware and sends over WiFi
+# 5. ESP32 installs new firmware and reboots
+# 6. Total time: ~2 minutes
+#------------------------------------------------------------------------------
+
+ota:
+  # PSEUDO CODE: Require password for OTA updates
+  password: !secret esphome_ota_password
+  
+  # PSEUDO CODE: Set OTA upload speed
+  # COMMON LANGUAGE: How fast to send updates (safer = slower but more reliable)
+  safe_mode: true
+
+#------------------------------------------------------------------------------
+# LOGGING CONFIGURATION
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# DEFINE log verbosity level
+# ENABLE serial output for USB debugging
+# ENABLE network output for wireless debugging
+#
+# COMMON LANGUAGE:
+# Logging is like a diary where the ESP32 writes down what it's doing.
+# You can read these logs to troubleshoot problems. Logs can be viewed
+# through USB cable or wirelessly over WiFi.
+#
+# LOG LEVELS (from quieter to noisier):
+# - NONE: No logging (not recommended)
+# - ERROR: Only critical failures
+# - WARN: Errors + warnings
+# - INFO: Errors + warnings + general info (RECOMMENDED)
+# - DEBUG: Everything including technical details
+# - VERBOSE: Extreme detail (slows down ESP32)
+#------------------------------------------------------------------------------
+
+logger:
+  # PSEUDO CODE: Set overall log level
+  # COMMON LANGUAGE: How much detail to log
+  level: INFO
+  
+  # PSEUDO CODE: Set baud rate for serial connection
+  # COMMON LANGUAGE: Speed of USB communication (must match serial monitor)
+  baud_rate: 115200
+  
+  # PSEUDO CODE: Filter specific component logs
+  # COMMON LANGUAGE: Reduce spam from noisy components
+  logs:
+    sensor: INFO
+    switch: INFO
+    wifi: INFO
+    api: INFO
+    ota: INFO
+
+#------------------------------------------------------------------------------
+# WEB SERVER (Optional but useful)
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# START web server on ESP32
+# ALLOW local access via browser
+#
+# COMMON LANGUAGE:
+# The ESP32 hosts a simple web page that shows sensor values and allows
+# you to control switches. You can access it by typing the ESP32's IP
+# address in a web browser. Useful for testing without Home Assistant.
+#
+# EXAMPLE: http://192.168.1.50/
+#------------------------------------------------------------------------------
+
+web_server:
+  # PSEUDO CODE: Enable web server on port 80
+  port: 80
+  
+  # PSEUDO CODE: Enable authentication (optional)
+  # COMMON LANGUAGE: Require password to access web page
+  # auth:
+  #   username: admin
+  #   password: !secret web_server_password
+
+#------------------------------------------------------------------------------
+# STATUS LED (Optional - shows ESP32 status)
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# DEFINE status LED to show connection state
+# IF connected to WiFi AND connected to HA THEN:
+#   LED = OFF (all good)
+# ELSE IF connected to WiFi BUT not HA THEN:
+#   LED = SLOW BLINK (HA unreachable)
+# ELSE:
+#   LED = FAST BLINK (no WiFi)
+# END IF
+#
+# COMMON LANGUAGE:
+# Many ESP32 boards have a built-in LED. We can use it to show if the
+# device is working correctly. A quick glance tells you if there's a problem.
+#------------------------------------------------------------------------------
+
+# Uncomment if your ESP32 has a built-in LED (usually GPIO 2)
+# status_led:
+#   pin:
+#     number: GPIO2
+#     inverted: false
+
+#------------------------------------------------------------------------------
+# TIME SYNCHRONIZATION
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# SYNC time with Home Assistant server
+# UPDATE time every hour
+# USE timezone for correct local time
+#
+# COMMON LANGUAGE:
+# ESP32 doesn't have a battery-backed clock, so it needs to ask Home
+# Assistant what time it is. This allows time-based automations on the ESP32.
+#------------------------------------------------------------------------------
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    
+    # PSEUDO CODE: Execute actions on time sync
+    # COMMON LANGUAGE: Do something when time is updated
+    on_time_sync:
+      then:
+        - logger.log: "Time synchronized with Home Assistant"
+
+#------------------------------------------------------------------------------
+# RESTART BUTTON (Useful for remote troubleshooting)
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# CREATE virtual button in Home Assistant
+# WHEN button pressed THEN:
+#   LOG restart request
+#   REBOOT ESP32
+# END WHEN
+#
+# COMMON LANGUAGE:
+# Adds a restart button to Home Assistant. If the ESP32 is acting weird,
+# you can reboot it remotely without physically unplugging it.
+#------------------------------------------------------------------------------
+
+button:
+  - platform: restart
+    name: "Restart ESP32"
+    id: restart_button
+
+#------------------------------------------------------------------------------
+# COMMON PSEUDO CODE EXECUTION FLOW
+#------------------------------------------------------------------------------
+#
+# ESP32_STARTUP_SEQUENCE:
+#   1. POWER ON
+#   2. LOAD firmware from flash memory
+#   3. INITIALIZE components (GPIO, I2C, etc.)
+#   4. ATTEMPT WiFi connection
+#      WHILE not connected AND attempts < 10:
+#        TRY connect to WiFi
+#        IF failed THEN WAIT 5 seconds
+#      END WHILE
+#   5. IF WiFi connected THEN:
+#        SYNC time with Home Assistant
+#        CONNECT to Home Assistant API
+#        PUBLISH all sensor states
+#        SUBSCRIBE to switch commands
+#        START sensor reading loop
+#      ELSE:
+#        ACTIVATE fallback AP mode
+#        WAIT for user reconfiguration
+#      END IF
+#   6. ENTER main loop (process sensors, switches, etc.)
+#
+# MAIN_LOOP:
+#   WHILE true:
+#     READ sensors at configured intervals
+#     IF sensor value changed THEN:
+#       PUBLISH to Home Assistant
+#     END IF
+#     
+#     CHECK for incoming switch commands
+#     IF command received THEN:
+#       EXECUTE command
+#       PUBLISH new switch state
+#     END IF
+#     
+#     CHECK WiFi connection
+#     IF disconnected THEN:
+#       ATTEMPT reconnection
+#     END IF
+#     
+#     CHECK HA API connection
+#     IF disconnected THEN:
+#       ATTEMPT reconnection
+#     END IF
+#     
+#     YIELD to other tasks (non-blocking)
+#   END WHILE
+#
+################################################################################
+

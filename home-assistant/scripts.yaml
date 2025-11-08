@@ -1,0 +1,521 @@
+################################################################################
+# HOME ASSISTANT SCRIPTS
+# Reusable Action Sequences for Garden Automation
+# By Brian Kuzdas - 03/02/2024 - Copyright (c) 2024 Brian Kuzdas
+################################################################################
+#
+# PSEUDO CODE CONCEPT:
+# Scripts are like functions in programming - reusable sequences of actions
+# that can be called from automations, dashboards, or other scripts.
+#
+# STRUCTURE:
+# script_name:
+#   alias: Human-readable name
+#   sequence:
+#     - action 1
+#     - action 2
+#     - ...
+#
+# COMMON LANGUAGE:
+# Scripts are pre-written recipes that can be run anytime.
+# Instead of writing the same steps repeatedly, write once and reuse.
+#
+################################################################################
+
+################################################################################
+# WATER ALL ZONES SCRIPT
+################################################################################
+# PSEUDO CODE:
+# FOR each zone in zones:
+#   CHECK if soil moisture is below threshold
+#   IF yes THEN:
+#     OPEN valve
+#     CALCULATE adjusted duration based on temperature
+#     WAIT for duration
+#     CLOSE valve
+#     WAIT for soil to settle (5 minutes)
+#   END IF
+# END FOR
+# SEND completion notification
+#
+# COMMON LANGUAGE:
+# Water every zone one at a time, adjusting watering time based on
+# temperature and soil moisture. Wait between zones for water to soak in.
+################################################################################
+water_all_zones:
+  alias: "Water All Zones"
+  description: "Sequential watering of all garden zones"
+  icon: mdi:sprinkler-variant
+  
+  sequence:
+    # STEP 1: Water Zone A
+    - service: script.water_zone
+      data:
+        zone: "zone_a"
+        duration: >
+          {{ (states('input_number.default_watering_duration') | int * 
+              states('sensor.watering_duration_adjustment') | int / 100) | int }}
+    
+    # STEP 2: Wait for water to soak in
+    - delay:
+        minutes: 5
+    
+    # STEP 3: Water Zone B
+    - service: script.water_zone
+      data:
+        zone: "zone_b"
+        duration: >
+          {{ (states('input_number.default_watering_duration') | int * 
+              states('sensor.watering_duration_adjustment') | int / 100) | int }}
+    
+    # STEP 4: Wait for water to soak in
+    - delay:
+        minutes: 5
+    
+    # STEP 5: Water Zone C (if exists)
+    - service: script.water_zone
+      data:
+        zone: "zone_c"
+        duration: >
+          {{ (states('input_number.default_watering_duration') | int * 
+              states('sensor.watering_duration_adjustment') | int / 100) | int }}
+    
+    # STEP 6: Wait for water to soak in
+    - delay:
+        minutes: 5
+    
+    # STEP 7: Water Zone D (if exists)
+    - service: script.water_zone
+      data:
+        zone: "zone_d"
+        duration: >
+          {{ (states('input_number.default_watering_duration') | int * 
+              states('sensor.watering_duration_adjustment') | int / 100) | int }}
+    
+    # STEP 8: Send completion notification
+    - service: notify.email
+      data:
+        title: "✅ Watering Cycle Complete"
+        message: >
+          All zones watered successfully.
+          Total time: {{ (states('input_number.default_watering_duration') | int * 4) }} minutes
+          Completed at: {{ now().strftime('%H:%M') }}
+
+################################################################################
+# WATER SINGLE ZONE SCRIPT
+################################################################################
+# PSEUDO CODE:
+# INPUT: zone (zone_a, zone_b, etc.), duration (minutes)
+# 
+# CHECK if soil moisture below threshold
+# IF yes THEN:
+#   TURN ON pump (if using reservoir)
+#   WAIT 3 seconds for pump pressure
+#   OPEN zone valve
+#   LOG watering start
+#   WAIT for specified duration
+#   CLOSE zone valve
+#   TURN OFF pump
+#   LOG watering complete
+#   UPDATE watering history
+# ELSE:
+#   LOG "Soil moisture adequate, skipping watering"
+# END IF
+#
+# COMMON LANGUAGE:
+# Water one specific zone for a set amount of time. First check if
+# it actually needs water. Turn pump on, open valve, wait, close valve.
+################################################################################
+water_zone:
+  alias: "Water Single Zone"
+  description: "Water a specific zone with moisture check"
+  icon: mdi:water
+  
+  fields:
+    zone:
+      description: "Zone identifier (zone_a, zone_b, zone_c, zone_d)"
+      example: "zone_a"
+    duration:
+      description: "Watering duration in minutes"
+      example: 15
+  
+  sequence:
+    # STEP 1: Check if zone needs watering
+    - condition: template
+      value_template: >
+        {{ states('sensor.' ~ zone ~ '_soil_moisture') | float(100) < 
+           states('input_number.soil_moisture_low_threshold') | float(30) }}
+    
+    # STEP 2: Turn on pump (if equipped)
+    - service: switch.turn_on
+      target:
+        entity_id: switch.water_pump
+    
+    # STEP 3: Wait for pump to build pressure
+    - delay:
+        seconds: 3
+    
+    # STEP 4: Open zone valve
+    - service: switch.turn_on
+      target:
+        entity_id: "switch.{{ zone }}_valve"
+    
+    # STEP 5: Log start of watering
+    - service: logbook.log
+      data:
+        name: "Watering Started"
+        message: >
+          Zone {{ zone }} watering started. Duration: {{ duration }} minutes.
+          Soil moisture: {{ states('sensor.' ~ zone ~ '_soil_moisture') }}%
+    
+    # STEP 6: Wait for specified duration
+    - delay:
+        minutes: "{{ duration }}"
+    
+    # STEP 7: Close zone valve
+    - service: switch.turn_off
+      target:
+        entity_id: "switch.{{ zone }}_valve"
+    
+    # STEP 8: Wait for valve to close
+    - delay:
+        seconds: 2
+    
+    # STEP 9: Turn off pump
+    - service: switch.turn_off
+      target:
+        entity_id: switch.water_pump
+    
+    # STEP 10: Log completion
+    - service: logbook.log
+      data:
+        name: "Watering Complete"
+        message: "Zone {{ zone }} watering complete"
+
+################################################################################
+# WATER DRY ZONES ONLY
+################################################################################
+# PSEUDO CODE:
+# FOR each zone in all_zones:
+#   READ soil_moisture
+#   IF soil_moisture < low_threshold THEN:
+#     CALL water_zone(zone)
+#     ADD zone to watered_list
+#   ELSE:
+#     SKIP zone
+#   END IF
+# END FOR
+# SEND notification with watered_list
+#
+# COMMON LANGUAGE:
+# Check every zone. Only water zones that are actually dry.
+# Skip zones that have enough moisture. Report which zones were watered.
+################################################################################
+water_dry_zones:
+  alias: "Water Dry Zones Only"
+  description: "Water only zones with low soil moisture"
+  icon: mdi:water-alert
+  
+  sequence:
+    # Check Zone A
+    - choose:
+        - conditions:
+            - condition: numeric_state
+              entity_id: sensor.zone_a_soil_moisture
+              below: input_number.soil_moisture_low_threshold
+          sequence:
+            - service: script.water_zone
+              data:
+                zone: "zone_a"
+                duration: >
+                  {{ states('input_number.default_watering_duration') | int }}
+    
+    # Check Zone B
+    - choose:
+        - conditions:
+            - condition: numeric_state
+              entity_id: sensor.zone_b_soil_moisture
+              below: input_number.soil_moisture_low_threshold
+          sequence:
+            - service: script.water_zone
+              data:
+                zone: "zone_b"
+                duration: >
+                  {{ states('input_number.default_watering_duration') | int }}
+    
+    # Check Zone C
+    - choose:
+        - conditions:
+            - condition: numeric_state
+              entity_id: sensor.zone_c_soil_moisture
+              below: input_number.soil_moisture_low_threshold
+          sequence:
+            - service: script.water_zone
+              data:
+                zone: "zone_c"
+                duration: >
+                  {{ states('input_number.default_watering_duration') | int }}
+    
+    # Check Zone D
+    - choose:
+        - conditions:
+            - condition: numeric_state
+              entity_id: sensor.zone_d_soil_moisture
+              below: input_number.soil_moisture_low_threshold
+          sequence:
+            - service: script.water_zone
+              data:
+                zone: "zone_d"
+                duration: >
+                  {{ states('input_number.default_watering_duration') | int }}
+
+################################################################################
+# EMERGENCY STOP ALL WATERING
+################################################################################
+# PSEUDO CODE:
+# CLOSE all zone valves immediately
+# TURN OFF pump
+# SEND urgent notification
+#
+# COMMON LANGUAGE:
+# Panic button! Immediately shut off everything related to watering.
+# Use if you see something wrong or need to stop watering right away.
+################################################################################
+emergency_stop:
+  alias: "Emergency Stop All Watering"
+  description: "Immediately stop all watering operations"
+  icon: mdi:stop-circle
+  
+  sequence:
+    # STEP 1: Turn off all valves immediately
+    - service: switch.turn_off
+      target:
+        entity_id:
+          - switch.zone_a_valve
+          - switch.zone_b_valve
+          - switch.zone_c_valve
+          - switch.zone_d_valve
+          - switch.main_water_valve
+    
+    # STEP 2: Turn off pump
+    - service: switch.turn_off
+      target:
+        entity_id: switch.water_pump
+    
+    # STEP 3: Log emergency stop
+    - service: logbook.log
+      data:
+        name: "EMERGENCY STOP"
+        message: "Emergency stop activated - all watering stopped"
+    
+    # STEP 4: Send notification
+    - service: notify.email
+      data:
+        title: "🛑 Emergency Stop Activated"
+        message: >
+          Emergency stop button pressed.
+          All watering operations stopped immediately.
+          Time: {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+
+################################################################################
+# SYSTEM WINTERIZATION
+################################################################################
+# PSEUDO CODE:
+# DISABLE master watering
+# CLOSE all valves
+# TURN OFF pump
+# ENABLE freeze protection
+# SEND winterization checklist
+#
+# COMMON LANGUAGE:
+# Prepare the system for winter. Shuts everything down and reminds you
+# to drain pipes to prevent freeze damage (critical for Wisconsin winters).
+################################################################################
+winterize_system:
+  alias: "Winterize Garden System"
+  description: "Prepare system for winter shutdown"
+  icon: mdi:snowflake
+  
+  sequence:
+    # STEP 1: Disable master watering
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.master_watering_enable
+    
+    # STEP 2: Close all valves
+    - service: switch.turn_off
+      target:
+        entity_id:
+          - switch.zone_a_valve
+          - switch.zone_b_valve
+          - switch.zone_c_valve
+          - switch.zone_d_valve
+          - switch.main_water_valve
+    
+    # STEP 3: Turn off pump
+    - service: switch.turn_off
+      target:
+        entity_id: switch.water_pump
+    
+    # STEP 4: Enable freeze protection
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.freeze_protection_enable
+    
+    # STEP 5: Log winterization
+    - service: logbook.log
+      data:
+        name: "System Winterization"
+        message: "System winterized for cold weather"
+    
+    # STEP 6: Send winterization checklist
+    - service: notify.email
+      data:
+        title: "❄️ System Winterization Complete"
+        message: >
+          Garden automation system has been winterized.
+          
+          WINTERIZATION CHECKLIST:
+          ☑️ All valves closed
+          ☑️ Pump disabled
+          ☑️ Watering disabled
+          ☑️ Freeze protection enabled
+          
+          MANUAL TASKS REQUIRED:
+          ⬜ Drain all exposed pipes
+          ⬜ Disconnect and store hoses
+          ⬜ Cover exposed valves
+          ⬜ Insulate pump (if not in heated space)
+          ⬜ Check for any water in system
+          
+          System will remain offline until spring startup.
+
+################################################################################
+# SPRING STARTUP
+################################################################################
+# PSEUDO CODE:
+# CHECK temperature is consistently above freezing
+# DISABLE freeze protection
+# TEST each valve individually
+# VERIFY no leaks
+# ENABLE master watering
+# SEND startup report
+#
+# COMMON LANGUAGE:
+# Wake up the system for spring. Test everything to make sure winter
+# didn't damage anything, then enable watering.
+################################################################################
+spring_startup:
+  alias: "Spring System Startup"
+  description: "Restart system for growing season"
+  icon: mdi:flower
+  
+  sequence:
+    # STEP 1: Verify temperature is safe
+    - condition: numeric_state
+      entity_id: sensor.nws_weather_temperature
+      above: 40
+    
+    # STEP 2: Disable freeze protection
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.freeze_protection_enable
+    
+    # STEP 3: Test Zone A valve
+    - service: switch.turn_on
+      target:
+        entity_id: switch.zone_a_valve
+    - delay:
+        seconds: 10
+    - service: switch.turn_off
+      target:
+        entity_id: switch.zone_a_valve
+    - delay:
+        seconds: 5
+    
+    # STEP 4: Test Zone B valve
+    - service: switch.turn_on
+      target:
+        entity_id: switch.zone_b_valve
+    - delay:
+        seconds: 10
+    - service: switch.turn_off
+      target:
+        entity_id: switch.zone_b_valve
+    - delay:
+        seconds: 5
+    
+    # STEP 5: Enable master watering
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.master_watering_enable
+    
+    # STEP 6: Log startup
+    - service: logbook.log
+      data:
+        name: "Spring Startup"
+        message: "System activated for growing season"
+    
+    # STEP 7: Send startup notification
+    - service: notify.email
+      data:
+        title: "🌱 Spring System Startup Complete"
+        message: >
+          Garden automation system is now active!
+          
+          STARTUP TESTS COMPLETED:
+          ✅ All valves tested
+          ✅ Temperature safe ({{ states('sensor.nws_weather_temperature') }}°F)
+          ✅ Freeze protection disabled
+          ✅ Master watering enabled
+          
+          PLEASE VERIFY:
+          - No leaks detected during valve tests
+          - All zones respond correctly
+          - Soil moisture sensors reading normally
+          - Weather integration functioning
+          
+          First scheduled watering: {{ state_attr('automation.morning_watering_schedule', 'next_trigger') }}
+
+################################################################################
+# SCRIPT EXECUTION PSEUDO CODE SUMMARY
+################################################################################
+#
+# SCRIPT_EXECUTION_ENGINE:
+#   ON script.call(script_name, parameters):
+#     LOAD script definition
+#     VALIDATE parameters
+#     
+#     IF script is already running AND mode != restart THEN:
+#       IF mode = single THEN:
+#         LOG "Script already running"
+#         RETURN
+#       ELSE IF mode = queued THEN:
+#         ADD to execution queue
+#         WAIT for current execution to finish
+#       ELSE IF mode = parallel THEN:
+#         START new instance
+#       END IF
+#     END IF
+#     
+#     EXECUTE sequence:
+#       FOR EACH action IN sequence:
+#         TRY:
+#           EXECUTE action
+#           IF action has delay THEN WAIT
+#           IF action has condition AND condition = false THEN STOP
+#         CATCH error:
+#           LOG error
+#           IF script.error_handling = stop THEN:
+#             STOP execution
+#           ELSE:
+#             CONTINUE to next action
+#           END IF
+#         END TRY
+#       END FOR
+#     
+#     LOG "Script completed"
+#     UPDATE last_triggered
+#
+################################################################################
+

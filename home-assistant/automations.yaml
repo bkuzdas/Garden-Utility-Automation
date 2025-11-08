@@ -1,0 +1,456 @@
+################################################################################
+# HOME ASSISTANT AUTOMATIONS
+# Garden & Utility Automation System
+# By Brian Kuzdas - 03/02/2024 - Copyright (c) 2024 Brian Kuzdas
+################################################################################
+#
+# PSEUDO CODE STRUCTURE:
+# Each automation follows this pattern:
+# 1. Define unique ID and friendly name
+# 2. Set trigger conditions (WHEN something happens)
+# 3. Set conditions (IF these are true)
+# 4. Define actions (THEN do this)
+#
+# COMMON LANGUAGE:
+# Automations are "if-this-then-that" rules that make the system smart.
+# Format: WHEN [trigger] IF [condition] THEN [action]
+#
+################################################################################
+
+################################################################################
+# MORNING WATERING AUTOMATION
+################################################################################
+# PSEUDO CODE:
+# TRIGGER: Morning watering time from input_datetime
+# CONDITIONS:
+#   - Master watering is enabled
+#   - It's watering season (April-October)
+#   - should_water_today sensor is true (checks weather)
+# ACTIONS:
+#   - Run watering sequence script for each zone
+#   - Send notification about watering started
+#
+# COMMON LANGUAGE:
+# Every morning at the time you set, check if conditions are good for watering.
+# If yes, water all zones and send you a notification.
+################################################################################
+- id: morning_watering_schedule
+  alias: "Morning Watering Schedule"
+  description: "Execute morning watering if conditions are favorable"
+  
+  trigger:
+    # TRIGGER: When time matches morning watering time
+    - platform: time
+      at: input_datetime.morning_watering_time
+  
+  condition:
+    # CONDITION: All of these must be true
+    - condition: and
+      conditions:
+        # Check master enable switch
+        - condition: state
+          entity_id: input_boolean.master_watering_enable
+          state: 'on'
+        
+        # Check it's watering season
+        - condition: state
+          entity_id: binary_sensor.watering_season
+          state: 'on'
+        
+        # Check weather conditions allow watering
+        - condition: state
+          entity_id: sensor.should_water_today
+          state: 'true'
+  
+  action:
+    # ACTION: Water each zone sequentially
+    - service: script.water_all_zones
+      data: {}
+    
+    # ACTION: Send notification
+    - service: notify.email
+      data:
+        title: "Garden Watering Started"
+        message: >
+          Morning watering cycle initiated at {{ now().strftime('%H:%M') }}.
+          Weather conditions: {{ states('weather.nws_weather') }}
+          Temperature: {{ states('sensor.nws_weather_temperature') }}°F
+
+################################################################################
+# EVENING WATERING AUTOMATION (Optional backup)
+################################################################################
+# PSEUDO CODE:
+# TRIGGER: Evening watering time
+# CONDITIONS: Same as morning + check soil moisture
+# ACTIONS: Water only zones with low moisture
+#
+# COMMON LANGUAGE:
+# Evening watering as backup if morning wasn't enough.
+# Only waters zones that are still dry.
+################################################################################
+- id: evening_watering_schedule
+  alias: "Evening Watering Schedule"
+  description: "Backup evening watering for zones that need it"
+  
+  trigger:
+    - platform: time
+      at: input_datetime.evening_watering_time
+  
+  condition:
+    - condition: and
+      conditions:
+        - condition: state
+          entity_id: input_boolean.master_watering_enable
+          state: 'on'
+        - condition: state
+          entity_id: binary_sensor.watering_season
+          state: 'on'
+        # Only water if at least one zone is dry
+        - condition: or
+          conditions:
+            - condition: numeric_state
+              entity_id: sensor.zone_a_soil_moisture
+              below: input_number.soil_moisture_low_threshold
+            - condition: numeric_state
+              entity_id: sensor.zone_b_soil_moisture
+              below: input_number.soil_moisture_low_threshold
+  
+  action:
+    # Water only dry zones
+    - service: script.water_dry_zones
+      data: {}
+
+################################################################################
+# FREEZE PROTECTION AUTOMATION
+################################################################################
+# PSEUDO CODE:
+# TRIGGER: Temperature drops below freeze threshold
+# CONDITIONS: Freeze protection enabled
+# ACTIONS:
+#   - Disable all watering
+#   - Send urgent notification
+#   - Log freeze event
+#
+# COMMON LANGUAGE:
+# If temperature drops near freezing, automatically shut down watering
+# to prevent pipe damage. Sends you an urgent alert.
+################################################################################
+- id: freeze_protection_trigger
+  alias: "Freeze Protection Activation"
+  description: "Protect system when temperature approaches freezing"
+  
+  trigger:
+    # TRIGGER: Temperature drops below threshold
+    - platform: numeric_state
+      entity_id: sensor.nws_weather_temperature
+      below: input_number.freeze_warning_temp
+  
+  condition:
+    # CONDITION: Freeze protection is enabled
+    - condition: state
+      entity_id: input_boolean.freeze_protection_enable
+      state: 'on'
+  
+  action:
+    # ACTION 1: Disable watering immediately
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.master_watering_enable
+    
+    # ACTION 2: Close all valves
+    - service: switch.turn_off
+      target:
+        entity_id:
+          - switch.zone_a_valve
+          - switch.zone_b_valve
+          - switch.zone_c_valve
+          - switch.zone_d_valve
+    
+    # ACTION 3: Send urgent notification
+    - service: notify.email
+      data:
+        title: "🚨 FREEZE PROTECTION ACTIVATED"
+        message: >
+          Temperature has dropped to {{ states('sensor.nws_weather_temperature') }}°F.
+          All watering has been disabled automatically.
+          Current time: {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+          
+          Please:
+          1. Drain exposed pipes if possible
+          2. Check system for freeze damage when temperature rises
+          3. Re-enable watering manually when safe
+    
+    # ACTION 4: Log event
+    - service: logbook.log
+      data:
+        name: "Freeze Protection"
+        message: "System automatically disabled due to low temperature"
+
+################################################################################
+# LEAK DETECTION AUTOMATION
+################################################################################
+# PSEUDO CODE:
+# TRIGGER: Flow sensor detects excessive flow
+# CONDITIONS:
+#   - Leak detection enabled
+#   - Flow exceeds threshold for X seconds
+# ACTIONS:
+#   - Close main water valve immediately
+#   - Disable all zones
+#   - Send urgent notification
+#   - Log leak event
+#
+# COMMON LANGUAGE:
+# If water flow is too high (indicating a leak), immediately shut off
+# the main water valve and alert you.
+################################################################################
+- id: leak_detection_emergency_shutoff
+  alias: "Leak Detection Emergency Shutoff"
+  description: "Detect leaks and shut off water supply"
+  
+  trigger:
+    # TRIGGER: Abnormal flow detected
+    - platform: numeric_state
+      entity_id: sensor.main_flow_rate
+      above: 25.0  # Liters per minute
+      for:
+        seconds: 10  # Must persist for 10 seconds
+  
+  condition:
+    # CONDITION: Leak detection is enabled
+    - condition: state
+      entity_id: input_boolean.leak_detection_enable
+      state: 'on'
+  
+  action:
+    # ACTION 1: EMERGENCY - Close main valve
+    - service: switch.turn_off
+      target:
+        entity_id: switch.main_water_valve
+    
+    # ACTION 2: Close all zone valves
+    - service: switch.turn_off
+      target:
+        entity_id:
+          - switch.zone_a_valve
+          - switch.zone_b_valve
+          - switch.zone_c_valve
+          - switch.zone_d_valve
+    
+    # ACTION 3: Stop pump if running
+    - service: switch.turn_off
+      target:
+        entity_id: switch.water_pump
+    
+    # ACTION 4: Send URGENT notification
+    - service: notify.email
+      data:
+        title: "🚨🚨 LEAK DETECTED - WATER SHUT OFF 🚨🚨"
+        message: >
+          URGENT: Abnormal water flow detected!
+          Flow rate: {{ states('sensor.main_flow_rate') }} L/min
+          Main water valve has been CLOSED automatically.
+          
+          Time: {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+          
+          IMMEDIATE ACTION REQUIRED:
+          1. Inspect property for water leaks
+          2. Check all pipes, valves, and connections
+          3. Verify flow sensor is functioning correctly
+          4. Manually reopen main valve only after leak is fixed
+    
+    # ACTION 5: Disable master watering
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.master_watering_enable
+    
+    # ACTION 6: Log critical event
+    - service: logbook.log
+      data:
+        name: "LEAK DETECTION"
+        message: "Emergency shutoff activated - flow rate: {{ states('sensor.main_flow_rate') }} L/min"
+
+################################################################################
+# LOW WATER TANK ALERT
+################################################################################
+# PSEUDO CODE:
+# TRIGGER: Tank level drops below threshold
+# CONDITIONS: Tank level sensor is available
+# ACTIONS:
+#   - Send notification
+#   - Disable pump to prevent dry run
+#
+# COMMON LANGUAGE:
+# When water tank gets low, alert you and turn off the pump to
+# prevent it from running dry (which damages pumps).
+################################################################################
+- id: low_water_tank_alert
+  alias: "Low Water Tank Alert"
+  description: "Alert when water reservoir is low"
+  
+  trigger:
+    # TRIGGER: Tank level drops below 20%
+    - platform: numeric_state
+      entity_id: sensor.water_tank_level
+      below: 20
+  
+  condition: []
+  
+  action:
+    # ACTION 1: Disable pump
+    - service: switch.turn_off
+      target:
+        entity_id: switch.water_pump
+    
+    # ACTION 2: Send notification
+    - service: notify.email
+      data:
+        title: "⚠️ Low Water Tank Level"
+        message: >
+          Water tank level is at {{ states('sensor.water_tank_level') }}%.
+          Pump has been disabled to prevent dry running.
+          Please refill tank.
+
+################################################################################
+# SOIL MOISTURE EMERGENCY WATERING
+################################################################################
+# PSEUDO CODE:
+# TRIGGER: Soil moisture drops critically low
+# CONDITIONS:
+#   - Master watering enabled
+#   - Temperature above freezing
+#   - Not already watering
+# ACTIONS:
+#   - Water the critically dry zone immediately
+#   - Send notification
+#
+# COMMON LANGUAGE:
+# If soil gets dangerously dry (plant stress), water immediately
+# regardless of schedule. Like an emergency override.
+################################################################################
+- id: emergency_soil_moisture_watering
+  alias: "Emergency Soil Moisture Watering"
+  description: "Water immediately if soil becomes critically dry"
+  
+  trigger:
+    # TRIGGER: Any zone drops below 15% moisture (critical)
+    - platform: numeric_state
+      entity_id: sensor.zone_a_soil_moisture
+      below: 15
+      id: zone_a
+    
+    - platform: numeric_state
+      entity_id: sensor.zone_b_soil_moisture
+      below: 15
+      id: zone_b
+  
+  condition:
+    # CONDITIONS: Safe to water
+    - condition: state
+      entity_id: input_boolean.master_watering_enable
+      state: 'on'
+    
+    - condition: numeric_state
+      entity_id: sensor.nws_weather_temperature
+      above: 40  # Above 40°F
+  
+  action:
+    # ACTION: Water the dry zone
+    - service: script.water_zone
+      data:
+        zone: "{{ trigger.id }}"
+        duration: "{{ states('input_number.default_watering_duration') | int }}"
+    
+    # Send notification
+    - service: notify.email
+      data:
+        title: "Emergency Watering Activated"
+        message: >
+          Zone {{ trigger.id }} moisture critically low: {{ trigger.to_state.state }}%
+          Emergency watering initiated.
+
+################################################################################
+# DAILY WEATHER REPORT
+################################################################################
+# PSEUDO CODE:
+# TRIGGER: Every day at 7 AM
+# CONDITIONS: None
+# ACTIONS: Send weather summary and watering plan
+#
+# COMMON LANGUAGE:
+# Every morning, get a summary of today's weather and whether
+# the system will water today.
+################################################################################
+- id: daily_weather_report
+  alias: "Daily Weather Report"
+  description: "Morning weather summary and watering plan"
+  
+  trigger:
+    - platform: time
+      at: "07:00:00"
+  
+  condition: []
+  
+  action:
+    - service: notify.email
+      data:
+        title: "Garden Automation Daily Report"
+        message: >
+          Good morning! Here's your garden report:
+          
+          📅 Date: {{ now().strftime('%A, %B %d, %Y') }}
+          
+          🌡️ Current Temperature: {{ states('sensor.nws_weather_temperature') }}°F
+          🌤️ Weather: {{ states('weather.nws_weather') }}
+          💨 Wind: {{ states('sensor.nws_weather_wind_speed') }} mph
+          🌧️ Rain Forecast: {{ state_attr('weather.nws_weather', 'forecast')[0].precipitation }} inches
+          
+          💧 Watering Plan: {% if is_state('sensor.should_water_today', 'true') %}✅ Scheduled{% else %}❌ Skipped (weather){% endif %}
+          
+          🌱 Soil Moisture:
+            - Zone A: {{ states('sensor.zone_a_soil_moisture') }}%
+            - Zone B: {{ states('sensor.zone_b_soil_moisture') }}%
+          
+          Have a great day! 🌱
+
+################################################################################
+# PSEUDO CODE SUMMARY - AUTOMATION EXECUTION LOGIC
+################################################################################
+#
+# AUTOMATION_ENGINE_LOGIC:
+#   WHILE Home Assistant is running:
+#     FOR EACH automation:
+#       MONITOR all triggers
+#       
+#       IF trigger event occurs THEN:
+#         EVALUATE all conditions
+#         
+#         IF all conditions are TRUE THEN:
+#           EXECUTE action sequence
+#           LOG automation execution
+#           UPDATE last_triggered timestamp
+#           
+#           IF action fails THEN:
+#             LOG error
+#             SEND notification (if configured)
+#             CONTINUE (don't stop other automations)
+#           END IF
+#         ELSE:
+#           LOG "Conditions not met"
+#           SKIP action execution
+#         END IF
+#       END IF
+#     END FOR
+#   END WHILE
+#
+# AUTOMATION STATE MACHINE:
+#   States: idle → triggered → evaluating_conditions → executing_actions → idle
+#   
+#   Each automation maintains:
+#   - last_triggered: timestamp
+#   - current_state: state machine state
+#   - trigger_count: number of times triggered
+#   - failure_count: number of failed executions
+#
+################################################################################
+

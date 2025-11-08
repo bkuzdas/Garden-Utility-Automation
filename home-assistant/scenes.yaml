@@ -1,0 +1,60 @@
+################################################################################
+# HOME ASSISTANT SCENES
+# Predefined system states for quick activation
+# By Brian Kuzdas - 03/02/2024 - Copyright (c) 2024 Brian Kuzdas
+################################################################################
+#
+# PSEUDO CODE CONCEPT:
+# SCENE = snapshot of multiple entity states
+# WHEN scene activated THEN set all entities to saved states
+#
+# COMMON LANGUAGE:
+# Scenes are like presets. Instead of manually setting multiple switches
+# and values, you activate one scene and everything is set automatically.
+#
+################################################################################
+
+# Scene: All Zones Off (Safety/Vacation Mode)
+- name: All Zones Off
+  id: all_zones_off
+  icon: mdi:water-off
+  entities:
+    switch.zone_a_valve: off
+    switch.zone_b_valve: off
+    switch.zone_c_valve: off
+    switch.zone_d_valve: off
+    switch.water_pump: off
+    input_boolean.master_watering_enable: off
+
+# Scene: Emergency Stop
+- name: Emergency Stop
+  id: emergency_stop
+  icon: mdi:alert-octagon
+  entities:
+    switch.zone_a_valve: off
+    switch.zone_b_valve: off
+    switch.zone_c_valve: off
+    switch.zone_d_valve: off
+    switch.water_pump: off
+    switch.main_water_valve: off
+    input_boolean.master_watering_enable: off
+
+# Scene: Normal Operation
+- name: Normal Operation
+  id: normal_operation
+  icon: mdi:play
+  entities:
+    input_boolean.master_watering_enable: on
+    input_boolean.leak_detection_enable: on
+    input_boolean.freeze_protection_enable: on
+    switch.main_water_valve: on
+
+# Scene: Vacation Mode
+- name: Vacation Mode
+  id: vacation_mode
+  icon: mdi:beach
+  entities:
+    input_boolean.master_watering_enable: off
+    switch.water_pump: off
+    # All valves remain controllable for testing
+

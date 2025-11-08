@@ -1,0 +1,307 @@
+################################################################################
+# GARDEN & UTILITY AUTOMATION - DOCKER COMPOSE CONFIGURATION
+# By Brian Kuzdas - 03/02/2024 - Copyright (c) 2024 Brian Kuzdas
+################################################################################
+#
+# PSEUDO CODE LOGIC:
+# 1. Define three core services: Home Assistant, MQTT Broker, ESPHome Dashboard
+# 2. Configure Home Assistant with host networking for device discovery
+# 3. Set up MQTT Broker with persistent storage and authentication
+# 4. Deploy ESPHome Dashboard for OTA firmware updates
+# 5. Create shared network for inter-container communication
+# 6. Configure automatic restart policies for reliability
+# 7. Mount volumes for persistent data across container restarts
+#
+# COMMON LANGUAGE EXPLANATION:
+# This file is like a blueprint for building three software "rooms" (containers):
+# - Room 1 (Home Assistant): The brain that makes decisions
+# - Room 2 (MQTT Broker): The messenger that carries notes between devices
+# - Room 3 (ESPHome): The workshop for updating remote controllers
+# Each room has its own supplies (volumes) and knows how to talk to others
+#
+################################################################################
+
+version: '3.8'
+
+################################################################################
+# SERVICES DEFINITION
+# Each service is an independent container that performs a specific role
+################################################################################
+
+services:
+
+  #-----------------------------------------------------------------------------
+  # HOME ASSISTANT - CORE AUTOMATION LOGIC PROCESSOR
+  #-----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # - Start Home Assistant container from official image
+  # - Use host network mode so HA can discover devices on local network
+  # - Mount configuration files from ./home-assistant directory
+  # - Mount timezone info so schedules match local time
+  # - Give privileged access for hardware communication
+  # - Restart automatically if container stops
+  #
+  # COMMON LANGUAGE:
+  # Home Assistant is the "smart brain" of the system. It needs to see
+  # all devices on your home network (like ESP32s), so we give it special
+  # "host network" access. It stores its memory in the home-assistant folder.
+  #-----------------------------------------------------------------------------
+  
+  homeassistant:
+    container_name: garden_homeassistant
+    image: homeassistant/home-assistant:stable
+    
+    # NETWORK CONFIGURATION
+    # Host networking allows HA to discover devices via mDNS/SSDP
+    # Required for ESPHome native API discovery
+    network_mode: host
+    
+    # VOLUME MOUNTS
+    # Persistent storage for configuration, database, and logs
+    volumes:
+      # Main configuration directory
+      # Contains configuration.yaml, automations, scripts, etc.
+      - ./home-assistant:/config
+      
+      # Timezone synchronization
+      # Ensures schedules run at correct local time (Wisconsin)
+      - /etc/localtime:/etc/localtime:ro
+    
+    # ENVIRONMENT VARIABLES
+    environment:
+      # Set timezone explicitly (Wisconsin is in Central Time)
+      - TZ=America/Chicago
+    
+    # RESTART POLICY
+    # Always restart unless explicitly stopped
+    # Critical for reliability in production environment
+    restart: unless-stopped
+    
+    # PRIVILEGED MODE
+    # Required for USB device access (Zigbee/Z-Wave if used)
+    # Can be removed if not using USB devices
+    privileged: true
+    
+    # DEPENDENCIES
+    # Ensure MQTT broker starts before Home Assistant
+    depends_on:
+      - mqtt
+
+  #-----------------------------------------------------------------------------
+  # MQTT BROKER - MESSAGE COMMUNICATION BACKBONE
+  #-----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # - Start Eclipse Mosquitto MQTT broker
+  # - Expose port 1883 for MQTT connections
+  # - Expose port 9001 for WebSocket connections (optional)
+  # - Mount configuration file for authentication settings
+  # - Mount data directory for message persistence
+  # - Mount log directory for troubleshooting
+  # - Restart automatically on failure
+  #
+  # COMMON LANGUAGE:
+  # MQTT Broker is like a post office. ESP32 devices send messages here,
+  # and Home Assistant picks them up. It's the central communication hub
+  # that allows all devices to talk to each other efficiently.
+  #-----------------------------------------------------------------------------
+  
+  mqtt:
+    container_name: garden_mqtt_broker
+    image: eclipse-mosquitto:latest
+    
+    # PORT MAPPING
+    ports:
+      # Standard MQTT port (TCP)
+      # Used by ESP32 devices and Home Assistant
+      - "1883:1883"
+      
+      # WebSocket port (optional)
+      # Allows web browsers to connect to MQTT
+      - "9001:9001"
+    
+    # VOLUME MOUNTS
+    volumes:
+      # Configuration file
+      # Defines authentication, access control, listeners
+      - ./mqtt/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      
+      # Persistent data storage
+      # Stores retained messages and QoS 1/2 messages
+      - ./mqtt/data:/mosquitto/data
+      
+      # Log files
+      # MQTT connection logs for debugging
+      - ./mqtt/log:/mosquitto/log
+    
+    # ENVIRONMENT VARIABLES
+    environment:
+      - TZ=America/Chicago
+    
+    # RESTART POLICY
+    restart: unless-stopped
+    
+    # HEALTHCHECK
+    # Verify MQTT broker is responsive
+    # Checks every 30 seconds, timeout after 10 seconds
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  #-----------------------------------------------------------------------------
+  # ESPHOME DASHBOARD - ESP32 FIRMWARE MANAGEMENT
+  #-----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # - Start ESPHome dashboard container
+  # - Expose port 6052 for web interface
+  # - Mount esphome configuration directory
+  # - Use host network for device discovery during flashing
+  # - Restart automatically
+  #
+  # COMMON LANGUAGE:
+  # ESPHome Dashboard is a workshop tool. It compiles firmware for ESP32
+  # controllers and sends updates over WiFi (OTA). You use a web browser
+  # to manage all your ESP32 devices from one place.
+  #-----------------------------------------------------------------------------
+  
+  esphome:
+    container_name: garden_esphome_dashboard
+    image: esphome/esphome:latest
+    
+    # PORT MAPPING
+    ports:
+      # ESPHome Dashboard web interface
+      - "6052:6052"
+    
+    # VOLUME MOUNTS
+    volumes:
+      # ESPHome configuration files
+      # Contains YAML files for each ESP32 device
+      - ./esphome:/config
+      
+      # Timezone synchronization
+      - /etc/localtime:/etc/localtime:ro
+    
+    # ENVIRONMENT VARIABLES
+    environment:
+      - TZ=America/Chicago
+      # Optional: Set username/password for dashboard access
+      # - ESPHOME_DASHBOARD_USERNAME=admin
+      # - ESPHOME_DASHBOARD_PASSWORD=changeme
+    
+    # NETWORK MODE
+    # Host network allows direct USB access for initial flashing
+    network_mode: host
+    
+    # RESTART POLICY
+    restart: unless-stopped
+    
+    # PRIVILEGED MODE
+    # Required for USB device access during initial ESP32 flashing
+    privileged: true
+
+  #-----------------------------------------------------------------------------
+  # NODE-RED (OPTIONAL) - VISUAL AUTOMATION BUILDER
+  #-----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # - Start Node-RED container (optional advanced tool)
+  # - Expose port 1880 for web interface
+  # - Mount data directory for flows
+  # - Connect to custom network
+  #
+  # COMMON LANGUAGE:
+  # Node-RED is an optional visual programming tool. It's like flowchart
+  # software for creating automations. Some users prefer it to Home Assistant's
+  # YAML configuration. Commented out by default - uncomment to enable.
+  #-----------------------------------------------------------------------------
+  
+  # nodered:
+  #   container_name: garden_nodered
+  #   image: nodered/node-red:latest
+  #   
+  #   ports:
+  #     - "1880:1880"
+  #   
+  #   volumes:
+  #     - ./nodered:/data
+  #     - /etc/localtime:/etc/localtime:ro
+  #   
+  #   environment:
+  #     - TZ=America/Chicago
+  #   
+  #   restart: unless-stopped
+  #   
+  #   depends_on:
+  #     - mqtt
+  #     - homeassistant
+
+################################################################################
+# VOLUMES (Optional Named Volumes)
+################################################################################
+# PSEUDO CODE:
+# - Define named volumes for better Docker management
+# - Allows easier backup and migration
+#
+# COMMON LANGUAGE:
+# Named volumes are like labeled storage boxes that Docker manages.
+# Currently using bind mounts (./folder) for easier direct access.
+# Uncomment if you prefer Docker-managed volumes.
+################################################################################
+
+# volumes:
+#   homeassistant_config:
+#   mqtt_data:
+#   mqtt_log:
+#   esphome_config:
+
+################################################################################
+# NETWORKS (Optional Custom Networks)
+################################################################################
+# PSEUDO CODE:
+# - Create custom bridge network for container communication
+# - Isolate automation network from other Docker services
+#
+# COMMON LANGUAGE:
+# A custom network is like a private road connecting the containers.
+# Currently using host/default networking. Uncomment for isolation.
+################################################################################
+
+# networks:
+#   garden_automation:
+#     driver: bridge
+#     ipam:
+#       config:
+#         - subnet: 172.20.0.0/16
+
+################################################################################
+# DEPLOYMENT NOTES
+################################################################################
+#
+# INITIAL SETUP:
+# 1. Create required directories:
+#    mkdir -p home-assistant mqtt/config mqtt/data mqtt/log esphome
+#
+# 2. Copy configuration files:
+#    cp home-assistant/configuration.yaml.example home-assistant/configuration.yaml
+#    cp mqtt/config/mosquitto.conf.example mqtt/config/mosquitto.conf
+#
+# 3. Start services:
+#    docker-compose up -d
+#
+# 4. Check logs:
+#    docker-compose logs -f
+#
+# MAINTENANCE:
+# - Update containers: docker-compose pull && docker-compose up -d
+# - View logs: docker-compose logs -f [service_name]
+# - Restart service: docker-compose restart [service_name]
+# - Stop all: docker-compose down
+#
+# BACKUP:
+# - Backup volumes: tar -czf backup.tar.gz home-assistant mqtt esphome
+# - Automated backup script provided in ./scripts/backup.sh
+#
+################################################################################
+

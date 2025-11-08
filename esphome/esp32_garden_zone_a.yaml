@@ -1,0 +1,432 @@
+################################################################################
+# ESP32 GARDEN ZONE A CONTROLLER
+# Controls watering valves and monitors soil moisture for Garden Zone A
+# By Brian Kuzdas - 03/02/2024 - Copyright (c) 2024 Brian Kuzdas
+################################################################################
+#
+# PSEUDO CODE OVERVIEW:
+# 1. Define ESP32 board type and name
+# 2. Import common configuration (WiFi, API, OTA)
+# 3. Configure GPIO pins for sensors and actuators
+# 4. Define soil moisture sensors (analog or capacitive)
+# 5. Define water flow sensor for usage tracking
+# 6. Define solenoid valve controls (relay-driven)
+# 7. Implement safety logic (timeout, leak detection)
+#
+# COMMON LANGUAGE EXPLANATION:
+# This ESP32 controls everything for one garden zone:
+# - Reads soil moisture sensor to know when plants need water
+# - Measures water flow to track usage and detect leaks
+# - Controls the water valve (on/off)
+# - Reports everything back to Home Assistant
+# - Has safety features to prevent flooding
+#
+# HARDWARE CONNECTIONS:
+# - GPIO 34: Capacitive soil moisture sensor (analog input)
+# - GPIO 25: Water flow sensor (pulse counting)
+# - GPIO 26: Solenoid valve relay (digital output)
+# - GPIO 27: Optional temperature sensor (DHT22)
+#
+################################################################################
+
+#------------------------------------------------------------------------------
+# DEVICE IDENTIFICATION
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# DEFINE device name and board type
+# SET unique hostname for network identification
+#
+# COMMON LANGUAGE:
+# Tell ESPHome what kind of ESP32 board this is and what to call it.
+# The name appears in Home Assistant and on your network.
+#------------------------------------------------------------------------------
+
+esphome:
+  name: esp32-garden-zone-a
+  friendly_name: "Garden Zone A Controller"
+  
+  # PSEUDO CODE: Run code on boot
+  # COMMON LANGUAGE: Actions to perform when ESP32 first starts up
+  on_boot:
+    priority: -10
+    then:
+      # STEP 1: Close valve on startup (safety)
+      - switch.turn_off: zone_a_valve
+      - logger.log: "Zone A controller started - valve closed"
+
+# PSEUDO CODE: Define ESP32 board type
+# COMMON LANGUAGE: What specific ESP32 model you're using
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+#------------------------------------------------------------------------------
+# IMPORT COMMON CONFIGURATION
+#------------------------------------------------------------------------------
+# PSEUDO CODE: Include shared WiFi, API, OTA settings
+# COMMON LANGUAGE: Use the common settings we defined earlier
+#------------------------------------------------------------------------------
+
+<<: !include common/common.yaml
+
+#------------------------------------------------------------------------------
+# I2C BUS CONFIGURATION (if using I2C sensors)
+#------------------------------------------------------------------------------
+# PSEUDO CODE: Define I2C bus for digital sensors
+# COMMON LANGUAGE: Communication bus for certain sensors like BME280
+# Uncomment if using I2C sensors
+
+# i2c:
+#   sda: GPIO21
+#   scl: GPIO22
+#   scan: true
+#   id: bus_a
+
+#------------------------------------------------------------------------------
+# ANALOG TO DIGITAL CONVERTER (ADC) CONFIGURATION
+#------------------------------------------------------------------------------
+# PSEUDO CODE: Configure ADC attenuation for analog sensors
+# COMMON LANGUAGE: Adjust voltage reading range for sensors
+# ESP32 ADC can read 0-3.3V with different attenuation settings
+
+# Note: ESP32 ADC is configured per-pin in sensor definitions
+
+#------------------------------------------------------------------------------
+# SENSORS
+#------------------------------------------------------------------------------
+
+sensor:
+  
+  #----------------------------------------------------------------------------
+  # CAPACITIVE SOIL MOISTURE SENSOR
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # READ analog voltage from capacitive sensor
+  # CONVERT raw ADC value (0-4095) to percentage (0-100%)
+  # CALIBRATION:
+  #   - In air (dry): ~2900-3000 (0%)
+  #   - In water (wet): ~1200-1400 (100%)
+  # APPLY calibration formula
+  # FILTER reading with sliding window average
+  # PUBLISH to Home Assistant every 60 seconds
+  #
+  # COMMON LANGUAGE:
+  # This sensor measures how wet the soil is. It gives a voltage reading
+  # that changes with moisture. We convert that voltage to a percentage
+  # (0% = bone dry, 100% = saturated). The sensor is read many times and
+  # averaged to reduce noise from electrical interference.
+  #
+  # CALIBRATION REQUIRED:
+  # 1. Put sensor in open air, note raw_value (this is your dry_value)
+  # 2. Put sensor in cup of water, note raw_value (this is your wet_value)
+  # 3. Update calibration values below
+  #----------------------------------------------------------------------------
+  
+  - platform: adc
+    pin: GPIO34
+    name: "Zone A Soil Moisture Raw"
+    id: zone_a_moisture_raw
+    attenuation: 11db  # Allows reading 0-3.3V range
+    update_interval: 10s
+    internal: true  # Don't send to HA, we'll send the calibrated version
+    
+    # PSEUDO CODE: Apply calibration and filtering
+    filters:
+      # STEP 1: Average multiple readings to reduce noise
+      - sliding_window_moving_average:
+          window_size: 6  # Average last 6 readings (60 seconds)
+          send_every: 6
+      
+      # STEP 2: Convert raw ADC value to percentage
+      # FORMULA: moisture% = (dry_value - current) / (dry_value - wet_value) * 100
+      # 
+      # CALIBRATION VALUES (ADJUST FOR YOUR SENSOR):
+      - calibrate_linear:
+          - 2.8 -> 0.0   # Dry (in air) = 0% moisture
+          - 1.3 -> 100.0 # Wet (in water) = 100% moisture
+      
+      # STEP 3: Clamp values to 0-100% range
+      - lambda: |
+          if (x < 0) return 0;
+          if (x > 100) return 100;
+          return x;
+  
+  # PSEUDO CODE: Create calibrated moisture sensor
+  # COMMON LANGUAGE: This is the final soil moisture reading sent to HA
+  - platform: template
+    name: "Zone A Soil Moisture"
+    id: zone_a_soil_moisture
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: moisture
+    icon: "mdi:water-percent"
+    update_interval: 60s
+    
+    # PSEUDO CODE: Get value from calibrated raw sensor
+    lambda: |-
+      return id(zone_a_moisture_raw).state;
+  
+  #----------------------------------------------------------------------------
+  # WATER FLOW SENSOR (YF-S201 or similar)
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # COUNT pulses from flow sensor
+  # EACH pulse = X liters (depends on sensor specs)
+  # CALCULATE flow rate in liters per minute
+  # INTEGRATE total volume used
+  #
+  # COMMON LANGUAGE:
+  # This sensor measures how much water is flowing through the pipe. It has
+  # a little turbine inside that spins with the water. Each rotation generates
+  # electrical pulses. By counting pulses, we know the flow rate and total
+  # water used.
+  #
+  # TYPICAL CALIBRATION: YF-S201 = ~450 pulses per liter
+  #----------------------------------------------------------------------------
+  
+  - platform: pulse_counter
+    pin:
+      number: GPIO25
+      mode:
+        input: true
+        pullup: true
+    name: "Zone A Flow Rate"
+    id: zone_a_flow_rate
+    unit_of_measurement: "L/min"
+    accuracy_decimals: 2
+    icon: "mdi:water"
+    update_interval: 5s
+    
+    # PSEUDO CODE: Calculate flow rate
+    # FORMULA: flow_rate = (pulses_per_minute) / (pulses_per_liter) * 60
+    filters:
+      # YF-S201 calibration: 450 pulses per liter
+      # So: 450 pulses/L / 60 seconds = 7.5 pulses per second per L/min
+      - multiply: 0.1333  # Adjust based on your sensor calibration
+    
+    # PSEUDO CODE: Integrate total water used
+    total:
+      name: "Zone A Total Water Used"
+      unit_of_measurement: "L"
+      accuracy_decimals: 1
+      icon: "mdi:water"
+      filters:
+        - multiply: 0.00222  # Convert pulses to liters
+  
+  #----------------------------------------------------------------------------
+  # OPTIONAL: DHT22 TEMPERATURE & HUMIDITY SENSOR
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # READ temperature and humidity from DHT22
+  # PUBLISH to Home Assistant
+  #
+  # COMMON LANGUAGE:
+  # Local temperature and humidity sensor. Useful for understanding
+  # environmental conditions affecting plant water needs.
+  #----------------------------------------------------------------------------
+  
+  # - platform: dht
+  #   pin: GPIO27
+  #   model: DHT22
+  #   temperature:
+  #     name: "Zone A Temperature"
+  #     id: zone_a_temperature
+  #   humidity:
+  #     name: "Zone A Humidity"
+  #     id: zone_a_humidity
+  #   update_interval: 60s
+  
+  #----------------------------------------------------------------------------
+  # WIFI SIGNAL STRENGTH
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE: Report WiFi signal strength
+  # COMMON LANGUAGE: How strong is the WiFi connection (helps troubleshooting)
+  #----------------------------------------------------------------------------
+  
+  - platform: wifi_signal
+    name: "Zone A WiFi Signal"
+    update_interval: 60s
+
+#------------------------------------------------------------------------------
+# BINARY SENSORS (ON/OFF SENSORS)
+#------------------------------------------------------------------------------
+
+binary_sensor:
+  
+  # PSEUDO CODE: Report ESP32 connection status
+  # COMMON LANGUAGE: Is this ESP32 connected to Home Assistant?
+  - platform: status
+    name: "Zone A Controller Status"
+  
+  #----------------------------------------------------------------------------
+  # LEAK DETECTION (derived from flow sensor)
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # IF flow_rate > threshold AND valve is OFF THEN:
+  #   LEAK DETECTED (water flowing when it shouldn't be)
+  # END IF
+  #
+  # COMMON LANGUAGE:
+  # If water is flowing but the valve is closed, there must be a leak!
+  # This creates an alert in Home Assistant.
+  #----------------------------------------------------------------------------
+  
+  - platform: template
+    name: "Zone A Leak Detected"
+    id: zone_a_leak
+    device_class: problem
+    
+    # PSEUDO CODE: Check for leak condition
+    lambda: |-
+      // If valve is off but water is flowing, leak detected
+      if (!id(zone_a_valve).state && id(zone_a_flow_rate).state > 1.0) {
+        return true;  // Leak!
+      }
+      return false;  // All good
+
+#------------------------------------------------------------------------------
+# SWITCHES (ACTUATORS)
+#------------------------------------------------------------------------------
+
+switch:
+  
+  #----------------------------------------------------------------------------
+  # SOLENOID VALVE CONTROL
+  #----------------------------------------------------------------------------
+  # PSEUDO CODE:
+  # DEFINE relay output controlling solenoid valve
+  # IMPLEMENT safety timeout (max run time)
+  # IMPLEMENT interlock (only one valve at a time if shared pump)
+  #
+  # COMMON LANGUAGE:
+  # This controls the water valve. When turned on, water flows. When off,
+  # water stops. We add safety features:
+  # - Maximum run time (prevents flooding if automation fails)
+  # - Automatic shutoff on leak detection
+  #----------------------------------------------------------------------------
+  
+  - platform: gpio
+    pin: GPIO26
+    name: "Zone A Valve"
+    id: zone_a_valve
+    icon: "mdi:pipe-valve"
+    restore_mode: ALWAYS_OFF  # Always start closed on boot
+    
+    # PSEUDO CODE: Actions on valve state change
+    on_turn_on:
+      then:
+        - logger.log: "Zone A valve opened"
+        
+        # SAFETY: Automatic timeout after 60 minutes
+        # Prevents flooding if automation fails to turn off valve
+        - delay: 60min
+        - switch.turn_off: zone_a_valve
+        - logger.log: "Zone A valve auto-closed (timeout)"
+    
+    on_turn_off:
+      then:
+        - logger.log: "Zone A valve closed"
+
+#------------------------------------------------------------------------------
+# AUTOMATIONS (ESP32 LOCAL LOGIC)
+#------------------------------------------------------------------------------
+# PSEUDO CODE:
+# These automations run ON THE ESP32 itself, not in Home Assistant.
+# They provide faster response and work even if HA is offline.
+#
+# COMMON LANGUAGE:
+# These are emergency safety rules that the ESP32 follows automatically.
+# Even if Home Assistant crashes, these rules still protect your system.
+#------------------------------------------------------------------------------
+
+# AUTOMATION 1: Emergency valve shutoff on leak detection
+# PSEUDO CODE:
+# IF leak detected THEN:
+#   IMMEDIATELY close valve
+#   LOG emergency event
+# END IF
+
+# Note: This is handled by the leak detection binary sensor above
+# and can trigger Home Assistant automations
+
+# AUTOMATION 2: Prevent valve opening when offline
+# This is handled by restore_mode: ALWAYS_OFF
+
+################################################################################
+# COMPONENT INTERACTION PSEUDO CODE
+################################################################################
+#
+# WATERING_CYCLE_SEQUENCE:
+#   // Initiated by Home Assistant
+#   1. HA sends command: switch.turn_on(zone_a_valve)
+#   2. ESP32 receives command via API
+#   3. ESP32 executes on_turn_on actions:
+#      a. Set GPIO26 HIGH (energize relay)
+#      b. Relay closes contacts (energize solenoid)
+#      c. Solenoid opens valve (water flows)
+#      d. Log event
+#      e. Start 60-minute safety timer
+#   4. WHILE valve is open:
+#      a. Flow sensor generates pulses
+#      b. ESP32 counts pulses every 5 seconds
+#      c. Calculate flow rate
+#      d. Publish flow rate to HA
+#      e. Integrate total volume
+#      f. Check for leaks (flow when valve closed)
+#      g. Soil moisture sensor reads every 10 seconds
+#      h. Publish calibrated moisture to HA every 60 seconds
+#   5. After specified duration (controlled by HA):
+#      a. HA sends command: switch.turn_off(zone_a_valve)
+#      b. ESP32 receives command
+#      c. Set GPIO26 LOW (de-energize relay)
+#      d. Relay opens contacts (de-energize solenoid)
+#      e. Solenoid closes valve (water stops)
+#      f. Cancel safety timer
+#      g. Log event
+#   6. Water soaks into soil
+#   7. Soil moisture reading increases over next 10-30 minutes
+#   8. HA monitors moisture level for next watering decision
+#
+# LEAK_DETECTION_LOGIC:
+#   EVERY 5 seconds:
+#     READ flow_rate
+#     READ valve_state
+#     
+#     IF flow_rate > 1.0 L/min AND valve_state == OFF THEN:
+#       SET leak_detected = TRUE
+#       PUBLISH leak alert to HA
+#       HA automation triggers emergency shutoff
+#     ELSE:
+#       SET leak_detected = FALSE
+#     END IF
+#
+# SOIL_MOISTURE_READING_LOGIC:
+#   EVERY 10 seconds:
+#     READ ADC voltage from GPIO34
+#     ADD reading to sliding window buffer (size: 6)
+#     
+#     IF buffer is full (6 readings = 60 seconds) THEN:
+#       CALCULATE average of 6 readings
+#       APPLY calibration formula: percent = (dry - current) / (dry - wet) * 100
+#       CLAMP percent between 0 and 100
+#       PUBLISH moisture_percent to HA
+#       CLEAR buffer
+#     END IF
+#
+# SAFETY_TIMEOUT_LOGIC:
+#   ON valve_turn_on:
+#     START timer (60 minutes)
+#     
+#     WHILE timer not expired:
+#       WAIT
+#     END WHILE
+#     
+#     IF valve still ON THEN:
+#       FORCE valve OFF
+#       LOG "Emergency timeout shutoff"
+#       PUBLISH alert to HA
+#     END IF
+#
+################################################################################
+
